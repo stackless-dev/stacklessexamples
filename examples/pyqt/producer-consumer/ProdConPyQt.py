@@ -19,6 +19,7 @@ import random
 import sys
 from PyQt4 import QtGui, QtCore
 
+from ProdConPyQt_ui import Ui_MainWindow
 
 # Nice way to put the tasklet to sleep - from stackless.com wiki/Idioms
 ##########################################################
@@ -135,7 +136,7 @@ class Consumer(Agent):
 class mainWindow(QtGui.QMainWindow):
     def __init__(self):
         QtGui.QMainWindow.__init__(self)
-        from producer_consumer_ui import Ui_MainWindow
+
         # Set up the user interface from Designer.
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)

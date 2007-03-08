@@ -6,10 +6,6 @@ import sys
 Serialisation test
 April 27th, 2006
 Andrew Francis
-
-See if I can use channels along with pickling.
-
-Don't understand why I get a crash 
 """
 
 running = []
