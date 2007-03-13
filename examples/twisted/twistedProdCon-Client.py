@@ -33,6 +33,7 @@ import time
 from twisted.spread import pb
 from twisted.internet import reactor, task
 from twisted.cred import credentials
+from twisted.internet.error import *
 
 sleepingTasklets = []
 def Sleep(secondsToWait):
@@ -44,7 +45,7 @@ def Sleep(secondsToWait):
     channel.receive()
 
 def ManageSleepingTasklets():
-    while 1:
+    while stackless.getruncount() > 1:
         if len(sleepingTasklets):
             endTime = sleepingTasklets[0][0]
             if endTime <= time.time():
@@ -52,11 +53,7 @@ def ManageSleepingTasklets():
                 del sleepingTasklets[0]
                 # We have to send something, but it doesn't matter what as it is not used.
                 channel.send(None)
-            if len(sleepingTasklets) <= 0: 
-                time.sleep(endTime-time.time())
         stackless.schedule()
-        #if len(sleepingTasklets) <= 0: stackless.getcurrent().kill()
-        if stackless.getruncount <= 1: stackless.getcurrent().kill()
 
 class NWChannel(stackless.channel):
     '''
@@ -72,7 +69,7 @@ class NWChannel(stackless.channel):
         if self.balance == 0:
             self.exc = (type, value)
         else:
-            self.send_exception(type, value)        
+            self.send_exception(type, value)
 
     def receive(self):
         if hasattr(self, 'value'):
@@ -85,6 +82,46 @@ class NWChannel(stackless.channel):
             raise type, value
         return stackless.channel.receive(self)
 
+def blockOn(d, timeout=999):
+    """
+    Use me in stacklessy-code to wait for a Deferred to fire.
+    If the result is an failure, send the exception via the channel
+    to be captured by the tasklet.
+    The timeout parameter is passed in seconds, defaults to 999 seconds
+    and returns an exception.
+    """
+    ch = NWChannel()
+    me = stackless.getcurrent()
+    def goodCB(r, me, return_channel):
+        cancelTimeout()
+        return_channel.send_nowait(r)
+        # if the deferred is called back immediately, this function will be called
+        # from the original tasklet. no need to reschedule.
+        if stackless.getcurrent() != me:
+            stackless.schedule()
+
+    def badCB(f, me, return_channel):
+        cancelTimeout()
+        return_channel.send_exception_nowait(f.type, f.value)
+        # if the deferred fails immediately, this function will be called
+        # from the original tasklet. no need to reschedule.
+        if stackless.getcurrent() != me:
+            stackless.schedule()
+
+    def onTimeout(me, return_channel):
+        return_channel.send_exception_nowait("TimeoutException", "Defer Timeout")
+        if stackless.getcurrent() != me:
+            stackless.schedule()
+
+    def cancelTimeout():
+        if delayedCall.active():
+           delayedCall.cancel()
+
+    delayedCall = reactor.callLater(timeout, onTimeout, me, ch)
+    d.addCallback(goodCB, me, ch)
+    d.addErrback(badCB, me, ch)
+    return ch.receive()
+
 class Agent(object):
     '''
     This class is the base for the producer and consumer classes
@@ -92,7 +129,6 @@ class Agent(object):
     '''
     def __init__(self, name, login, password):
         self.me = stackless.tasklet(self.runAction)()
-        self.ch = NWChannel()
         self.name = name
         self.items = 0
         self.time = random.random()
@@ -101,38 +137,32 @@ class Agent(object):
 
     def runAction(self):
         factory = pb.PBClientFactory()
-        reactor.connectTCP("localhost", 8800, factory)
-        def1 = factory.login(credentials.UsernamePassword(self.login, self.pwd))
-        def1.addCallback(self.good, self.me, self.ch)
-        def1.addErrback(self.bad, self.me, self.ch)
-        self.perspective = self.ch.receive()
+        try:
+            reactor.connectTCP("localhost", 8800, factory)
+            def1 = factory.login(credentials.UsernamePassword(self.login, self.pwd))
+            self.perspective = blockOn(def1, 3) # Wait 3 seconds to login, then timeout.
+        except ConnectionRefusedError, val:
+            print "Connection could not be opened."
+            exit()
+        except "TimeoutException":
+               print "Timeout exception"
+               exit()
+        except:
+            print "MISC ERROR"
+            exit()
+
         #print "got perspective ref:", self.perspective
         self.connected = 1
         self.kill = False
         
         def1 = self.perspective.callRemote("getqueuesize")
-        def1.addCallback(self.good, self.me, self.ch)
-        def1.addErrback(self.bad, self.me, self.ch)
-        self.qmaxsize = self.ch.receive()
+        self.qmaxsize = blockOn(def1)
         while not self.kill:
             self.action()
     
     def action(self):
         pass
 
-    def good(self, r, me, return_channel):
-        return_channel.send_nowait(r)
-        # if the deferred is called back immediately, this function will be called
-        # from the original tasklet. no need to reschedule.
-        if stackless.getcurrent() != me:
-            stackless.schedule()
-
-    def bad(self, f, me, return_channel):
-        return_channel.send_exception_nowait(f.type, f.value)
-        # if the deferred fails immediately, this function will be called
-        # from the original tasklet. no need to reschedule.
-        if stackless.getcurrent() != me:
-            stackless.schedule()
 
 class Producer(Agent):
     def __init__(self, name, login, password):
@@ -141,9 +171,7 @@ class Producer(Agent):
     def action(self):
         # gets the queue size for the first time
         def1 = self.perspective.callRemote("getqueue")
-        def1.addCallback(self.good, self.me, self.ch)
-        def1.addErrback(self.bad, self.me, self.ch)
-        self.qsize = self.ch.receive()
+        self.qsize = blockOn(def1)
 
         while self.qsize+1 < self.qmaxsize:
             if self.qsize < 5:
@@ -154,15 +182,10 @@ class Producer(Agent):
                 Sleep(self.time*2)
             # asks the queue for its size
             def1 = self.perspective.callRemote("getqueue")
-            def1.addCallback(self.good, self.me, self.ch)
-            def1.addErrback(self.bad, self.me, self.ch)
-            self.qsize = self.ch.receive()
-            
+            self.qsize = blockOn(def1)
             # puts 1 production unit into queue
             def1 = self.perspective.callRemote("put", 1)
-            def1.addCallback(self.good, self.me, self.ch)
-            def1.addErrback(self.bad, self.me, self.ch)
-            resp = self.ch.receive()
+            resp = blockOn(def1)
             print self.name, " put ", resp
             self.items += resp
         else:
@@ -178,9 +201,7 @@ class Consumer(Agent):
     def action(self):
         # gets the queue size for the first time
         def1 = self.perspective.callRemote("getqueue")
-        def1.addCallback(self.good, self.me, self.ch)
-        def1.addErrback(self.bad, self.me, self.ch)
-        self.qsize = self.ch.receive()
+        self.qsize = blockOn(def1)
 
         while self.qsize > 0:
             if self.qsize > 5:
@@ -191,15 +212,11 @@ class Consumer(Agent):
                 Sleep(self.time*2)
             # asks the queue for its size
             def1 = self.perspective.callRemote("getqueue")
-            def1.addCallback(self.good, self.me, self.ch)
-            def1.addErrback(self.bad, self.me, self.ch)
-            self.qsize = self.ch.receive()
+            self.qsize = blockOn(def1)
 
             # gets 1 production unit from queue
             def1 = self.perspective.callRemote("get", 1)
-            def1.addCallback(self.good, self.me, self.ch)
-            def1.addErrback(self.bad, self.me, self.ch)
-            resp = self.ch.receive()
+            resp = blockOn(def1)
             print self.name, " got ", resp
             self.items += resp
         else:
@@ -225,7 +242,7 @@ def main():
         a = Consumer(name, "consumer", "cons")
         CID += 1
 
-    t = task.LoopingCall(stackless.schedule).start(0.00033)
+    t = task.LoopingCall(stackless.schedule).start(0.0001)
     sleepman = stackless.tasklet(ManageSleepingTasklets)()
     re = stackless.tasklet(reactor.run)()
     stackless.run()
