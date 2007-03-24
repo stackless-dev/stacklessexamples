@@ -130,7 +130,8 @@ class dispatcher(asyncore.dispatcher):
         #    self.dgramReadBuffers = {}
         #else:
         self.recvChannel = stackless.channel()
-        self.readBuffer = None
+        self.readBufferString = ''
+        self.readBufferList = []
 
         self.sendBuffer = ''
         self.sendToBuffers = []
@@ -181,40 +182,38 @@ class dispatcher(asyncore.dispatcher):
 
     # Read at most byteCount bytes.
     def recv(self, byteCount):
-        if self.readBuffer is None:
-            self.readBuffer = ""
-        if len(self.readBuffer) < byteCount:
-            self.readBuffer += self.recvChannel.receive()
-        stackless.schedule()
-        ret = self.readBuffer[:byteCount]
-        self.readBuffer = self.readBuffer[byteCount:]
+        if len(self.readBufferString) < byteCount:
+            self.readBufferString += self.recvChannel.receive()
+        # Disabling this because I believe it is the onus of the application
+        # to be aware of the need to run the scheduler to give other tasklets
+        # leeway to run.
+        # stackless.schedule()
+        ret = self.readBufferString[:byteCount]
+        self.readBufferString = self.readBufferString[byteCount:]
         return ret
 
     def recvfrom(self, byteCount):
-        if self.readBuffer is None:
-            self.readBuffer = []
-
         ret = ""
         address = None
         while 1:
-            while len(self.readBuffer):
-                data, dataAddress = self.readBuffer[0]
+            while len(self.readBufferList):
+                data, dataAddress = self.readBufferList[0]
                 if address is None:
                     address = dataAddress
                 elif address != dataAddress:
-                    # They got all the sequenial data from the given address.
+                    # They got all the sequential data from the given address.
                     return ret, address
 
                 ret += data
                 if len(ret) >= byteCount:
                     # We only partially used up this data.
-                    self.readBuffer[0] = ret[byteCount:], address
+                    self.readBufferList[0] = ret[byteCount:], address
                     return ret[:byteCount], address
 
                 # We completely used up this data.
-                del self.readBuffer[0]
+                del self.readBufferList[0]
 
-            self.readBuffer.append(self.recvChannel.receive())
+            self.readBufferList.append(self.recvChannel.receive())
 
     def close(self):
         asyncore.dispatcher.close(self)
@@ -228,7 +227,11 @@ class dispatcher(asyncore.dispatcher):
         while self.connectChannel and self.connectChannel.balance < 0:
             self.connectChannel.send_exception(error, 10061, 'Connection refused')
         while self.recvChannel and self.recvChannel.balance < 0:
-            self.recvChannel.send_exception(error, 10054, 'Connection reset by peer')
+            # The closing of a socket is indicted by receiving nothing.  The
+            # exception would have been sent if the server was killed, rather
+            # than closed down gracefully.
+            self.recvChannel.send("")
+            #self.recvChannel.send_exception(error, 10054, 'Connection reset by peer')
 
     # asyncore doesn't support this.  Why not?
     def fileno(self):
@@ -266,6 +269,11 @@ class dispatcher(asyncore.dispatcher):
                 stackless.tasklet(self.recvChannel.send)((ret, address))
             else:
                 ret = asyncore.dispatcher.recv(self, 20000)
+                # Not sure this is correct, but it seems to give the
+                # right behaviour.  Namely removing the socket from
+                # asyncore.
+                if not ret:
+                    self.close()
                 stackless.tasklet(self.recvChannel.send)(ret)
         except stdsocket.error, err:
             # XXX Is this correct?
@@ -297,6 +305,7 @@ class dispatcher(asyncore.dispatcher):
 
 
 if __name__ == '__main__':
+    import sys
     import struct
     # Test code goes here.
     testAddress = "127.0.0.1", 3000
@@ -305,10 +314,13 @@ if __name__ == '__main__':
     dataLength = len(data)
 
     print "creating listen socket"
-    def TestTCPServer(address):
+    def TestTCPServer(address, socketClass=None):
         global info, data, dataLength
 
-        listenSocket = socket(AF_INET, SOCK_STREAM)
+        if not socketClass:
+            socketClass = socket
+
+        listenSocket = socketClass(AF_INET, SOCK_STREAM)
         listenSocket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
         listenSocket.bind(address)
         listenSocket.listen(5)
@@ -349,11 +361,14 @@ if __name__ == '__main__':
 
         print "Done server"
 
-    def TestTCPClient(address):
+    def TestTCPClient(address, socketClass=None):
         global info, data, dataLength
 
+        if not socketClass:
+            socketClass = socket
+
         # Attempt 1:
-        clientSocket = socket()
+        clientSocket = socketClass()
         clientSocket.connect(address)
         print "client connection", 1, "waiting to recv"
         if clientSocket.recv(5) != "":
@@ -366,15 +381,17 @@ if __name__ == '__main__':
         clientSocket.connect(address)
         print "client connection", 2, "waiting to recv"
         s = clientSocket.recv(dataLength)
-        t = struct.unpack("i", s)
-        if t[0] == info:
-            print "client test", 2, "OK"
+        if s == "":
+            print "client test", 2, "FAIL (disconnect)"
         else:
-            print "client test", 2, "FAIL"
+            t = struct.unpack("i", s)
+            if t[0] == info:
+                print "client test", 2, "OK"
+            else:
+                print "client test", 2, "FAIL (wrong data)"
 
     def TestMonkeyPatchUrllib(uri):
         # replace the system socket with this module
-        import sys
         oldSocket = sys.modules["socket"]
         sys.modules["socket"] = __import__(__name__)
         try:
@@ -392,7 +409,6 @@ if __name__ == '__main__':
 
     def TestMonkeyPatchUDP(address):
         # replace the system socket with this module
-        import sys
         oldSocket = sys.modules["socket"]
         sys.modules["socket"] = __import__(__name__)
         try:
@@ -428,13 +444,37 @@ if __name__ == '__main__':
         finally:
             sys.modules["socket"] = oldSocket
 
-    stackless.tasklet(TestTCPServer)(testAddress)
-    stackless.tasklet(TestTCPClient)(testAddress)
-    stackless.run()
+    if len(sys.argv) == 2:
+        if sys.argv[1] == "client":
+            print "client started"
+            TestTCPClient(testAddress, stdsocket.socket)
+            print "client exited"
+        elif sys.argv[1] == "slpclient":
+            print "client started"
+            stackless.tasklet(TestTCPClient)(testAddress)
+            stackless.run()
+            print "client exited"
+        elif sys.argv[1] == "server":
+            print "server started"
+            TestTCPServer(testAddress, stdsocket.socket)
+            print "server exited"
+        elif sys.argv[1] == "slpserver":
+            print "server started"
+            stackless.tasklet(TestTCPServer)(testAddress)
+            stackless.run()
+            print "server exited"
+        else:
+            print "Usage:", sys.argv[0], "[client|server|slpclient|slpserver]"
+    
+        sys.exit(1)
+    else:
+        stackless.tasklet(TestTCPServer)(testAddress)
+        stackless.tasklet(TestTCPClient)(testAddress)
+        stackless.run()
 
-    stackless.tasklet(TestMonkeyPatchUrllib)("http://python.org/")
-    stackless.run()
+        stackless.tasklet(TestMonkeyPatchUrllib)("http://python.org/")
+        stackless.run()
 
-    TestMonkeyPatchUDP(testAddress)
+        TestMonkeyPatchUDP(testAddress)
 
-    print "result: SUCCESS"
+        print "result: SUCCESS"

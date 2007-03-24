@@ -33,19 +33,35 @@ class EndPoint:
             return
 
     def ReceiveIncomingData(self):
-        while self.socket.connected:
-            data = self.socket.recv(struct.calcsize("I"))
-            dataLength = struct.unpack("I", data)[0]
-            data = self.socket.recv(dataLength)
-            packet = cPickle.loads(data)
-            callID = packet[1]
-            if packet[0]:
-                channel = self.channelsByCallID[callID]
-                del self.channelsByCallID[callID]
-                channel.send(packet[2])
-            else:
-                ret = self.HandleIncomingCall(packet[2], packet[3], packet[4])
-                self.SendPacket(True, callID, ret)
+        sizeLength = struct.calcsize("I")
+        readBuffer = ""
+        while True:
+            rawPacket = self.socket.recv(sizeLength-len(readBuffer))
+            if not rawPacket:
+                print self.__class__.__name__, "socket disconnected"
+                return
+            readBuffer += rawPacket
+            if len(readBuffer) == sizeLength:
+                dataLength = struct.unpack("I", readBuffer)[0]
+                readBuffer = ""
+                while len(readBuffer) != dataLength:
+                    rawPacket = self.socket.recv(dataLength - len(readBuffer))
+                    if not rawPacket:
+                        print self.__class__.__name__, "socket unexpectedly disconnected"
+                        return
+                    readBuffer += rawPacket
+
+                packet = cPickle.loads(rawPacket)
+                callID = packet[1]
+                if packet[0]:
+                    channel = self.channelsByCallID[callID]
+                    del self.channelsByCallID[callID]
+                    channel.send(packet[2])
+                else:
+                    ret = self.HandleIncomingCall(packet[2], packet[3], packet[4])
+                    self.SendPacket(True, callID, ret)
+                readBuffer = ""
+
             stackless.schedule()
 
     def HandleIncomingCall(self, name, args, kwargs):
@@ -150,9 +166,11 @@ if __name__ == "__main__":
         for endpoint in server.endPoints:
             ret = endpoint.otherEnd.Hello()
             print "  SERVER GOT", ret, "FROM CLIENT"
+        #for endpoint in server.endPoints:
+        #    endpoint.socket.close()
         server.socket.close()
 
     stackless.tasklet(ClientTasklet)(client, server, clientSocket)
     stackless.run()
 
-    print "Done"
+    print "Scheduler exited"

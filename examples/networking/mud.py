@@ -42,7 +42,7 @@ class TelnetConnection(socket.dispatcher):
     echo = False
 
     def read(self): # TELNET
-        ret = self.readChannel.receive()
+        ret = self.recvChannel.receive()
         if self.echo:
             if ret == '\x08':
                 self.send(ret+" ")
@@ -50,13 +50,13 @@ class TelnetConnection(socket.dispatcher):
         return ret
 
     def readline(self): # TELNET
-        buf = self.readBuffer
+        buf = self.readBufferString
 
         while True:
             if buf.find('\r\n') > -1:
                 i = buf.index('\r\n')
                 ret = buf[:i+2]
-                self.readBuffer = buf[i+2:]
+                self.readBufferString = buf[i+2:]
                 while '\x08' in ret:
                     i = ret.index('\x08')
                     if i == 0:
