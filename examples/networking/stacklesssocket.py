@@ -477,4 +477,4 @@ if __name__ == '__main__':
 
         TestMonkeyPatchUDP(testAddress)
 
-        print "result: SUCCESS"
+        print "SUCCESS"
