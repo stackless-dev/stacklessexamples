@@ -34,29 +34,37 @@ from twisted.spread import pb
 from twisted.cred import checkers, portal, credentials
 from twisted.internet import reactor, task
 
-sleepingTasklets = []
+class Sleep(object):
+    def __init__(self):
+        self.sleepingTasklets = []
+        stackless.tasklet(self.ManageSleepingTasklets)()
 
-def Sleep(secondsToWait):
-    channel = stackless.channel()
-    endTime = time.time() + secondsToWait
-    sleepingTasklets.append((endTime, channel))
-    sleepingTasklets.sort()
-    # Block until we get sent an awakening notification.
-    channel.receive()
+    def Sleep(self, secondsToWait):
+        channel = stackless.channel()
+        endTime = time.time() + secondsToWait
+        self.sleepingTasklets.append((endTime, channel))
+        self.sleepingTasklets.sort()
+        # Block until we get sent an awakening notification.
+        channel.receive()
 
-def ManageSleepingTasklets():
-    while 1:
-        if len(sleepingTasklets):
-            endTime = sleepingTasklets[0][0]
-            if endTime <= time.time():
-                channel = sleepingTasklets[0][1]
-                del sleepingTasklets[0]
-                # We have to send something, but it doesn't matter what as it is not used.
-                channel.send(None)
-#            if len(sleepingTasklets) <= 0: time.sleep(endTime-time.time())
-        stackless.schedule()
-        if stackless.getruncount() <= 1: stackless.getcurrent().kill()
-        #if len(sleepingTasklets) <= 0: stackless.getcurrent().kill()
+    def ManageSleepingTasklets(self):
+        while True:
+          if len(self.sleepingTasklets):
+              endTime = self.sleepingTasklets[0][0]
+              if endTime <= time.time():
+                  channel = self.sleepingTasklets[0][1]
+                  del self.sleepingTasklets[0]
+                  # We have to send something, but it doesn't matter what as it is not used.
+                  channel.send(None)
+              elif stackless.getruncount() == 1:
+                  # We are the only tasklet running, the rest are blocked on channels sleeping.
+                  # We can call time.sleep until the first awakens to avoid a busy wait.
+                  delay = endTime - time.time()
+                  #print "wait delay", delay
+                  time.sleep(max(delay,0))
+          stackless.schedule()
+
+Sleep = Sleep().Sleep
 
 class Queue(object):
     def __init__(self, name):
@@ -153,8 +161,7 @@ q = Queue('q1')
 m = Monitor(q)
 
 reactor.listenTCP(8800, pb.PBServerFactory(p))
-t = task.LoopingCall(stackless.schedule).start(0.0033)
-sleepman = stackless.tasklet(ManageSleepingTasklets)()
+t = task.LoopingCall(stackless.schedule).start(0.0001)
 re = stackless.tasklet(reactor.run)()
 stackless.run()
 
