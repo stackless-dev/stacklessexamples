@@ -34,11 +34,13 @@ import socket as stdsocket # We need the "socket" name for the function we expor
 # If we are to masquerade as the socket module, we need to provide the constants.
 if "__all__" in stdsocket.__dict__:
     __all__ = stdsocket.__dict__
-tmpAll = globals().get("__all__", None)
-for k, v in stdsocket.__dict__.iteritems():
-    if tmpAll is None and k.upper() == k or tmpAll is not None and k in tmpAll:
-        globals()[k] = v
-if tmpAll is None:
+    for k, v in stdsocket.__dict__.iteritems():
+        if k in __all__:
+            globals()[k] = v
+else:
+    for k, v in stdsocket.__dict__.iteritems():
+        if k.upper() == k:
+            globals()[k] = v
     error = stdsocket.error
     timeout = stdsocket.timeout
     # WARNING: this function blocks and is not thread safe.
@@ -47,7 +49,6 @@ if tmpAll is None:
     # lookup service is only second best as getaddrinfo may
     # use other methods.
     getaddrinfo = stdsocket.getaddrinfo
-del tmpAll
 
 # urllib2 apparently uses this directly.  We need to cater for that.
 _fileobject = stdsocket._fileobject
