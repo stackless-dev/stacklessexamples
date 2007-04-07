@@ -16,7 +16,7 @@
 #
 
 # Monkeypatch in the stacklesssocket module.
-import sys
+import sys, time
 import stacklesssocket
 sys.modules["socket"] = stacklesssocket
 
@@ -34,15 +34,28 @@ Nothing to see here, move along..
 </html>
 """
 
+delays = [ 20, 5 ]
+delayIdx = 0
+
 class RequestHandler(BaseHTTPRequestHandler):
     # Respect keep alive requests.
     protocol_version = "HTTP/1.1"
 
     def do_GET(self):
+        global delayIdx
+
         self.send_response(200)
         self.send_header("Content-type", "text/html")
         self.send_header("Content-Length", len(body))
         self.end_headers()
+
+        t = time.time()
+        delay = delays[delayIdx % len(delays)]
+        delayIdx += 1
+        print stackless.getcurrent(), "blocked", delayIdx, "delay", delay
+        while time.time() < t + delay:
+            stackless.schedule()
+        print stackless.getcurrent(), "done"
 
         self.wfile.write(body)
 
