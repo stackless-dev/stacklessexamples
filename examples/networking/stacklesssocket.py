@@ -158,6 +158,9 @@ class dispatcher(asyncore.dispatcher):
         if self.socket.type != SOCK_DGRAM and not self.connected:
             if not self.connectChannel:
                 self.connectChannel = stackless.channel()
+                # Prefer the sender.  Do not block when sending, given that
+                # there is a tasklet known to be waiting, this will happen.
+                self.connectChannel.preference = 1
             self.connectChannel.receive()
 
     def send(self, data):
@@ -189,7 +192,10 @@ class dispatcher(asyncore.dispatcher):
     # Read at most byteCount bytes.
     def recv(self, byteCount):
         if len(self.readBufferString) < byteCount:
-            self.readBufferString += self.recvChannel.receive()
+            # If our buffer is empty, we must block for more data we also
+            # aggressively request more if it's available.
+            if len(self.readBufferString) == 0 or self.recvChannel.balance > 0:
+                self.readBufferString += self.recvChannel.receive()
         # Disabling this because I believe it is the onus of the application
         # to be aware of the need to run the scheduler to give other tasklets
         # leeway to run.
@@ -254,8 +260,6 @@ class dispatcher(asyncore.dispatcher):
     # Inform the blocked connect call that the connection has been made.
     def handle_connect(self):
         if self.socket.type != SOCK_DGRAM:
-            if not self.connectChannel:
-                self.connectChannel = stackless.channel()
             self.connectChannel.send(None)
 
     # Asyncore says its done but self.readBuffer may be non-empty
