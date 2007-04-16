@@ -61,16 +61,39 @@ class Server():
             data += clientsocket.recv(4096)
             if data == '':
                 break
-            # If the user sends a q!, close the connection and remove from list
-            if 'q!\r\n' in data:
-                print "Closed connection for %s:%s" % (address[0],address[1])
-                del self.clients[clientsocket]
-                break
-            # If we detect a \n send the message to all clients
+            # If we detect a \n filter the event
             if '\n' in data:
-                for client in self.clients:
-                    if not client.send('\rClient %s said: %s>' % (address,data)):
+                if data == '\r\n':
+                    if not clientsocket.send("Unknown command.  Type 'help' to see a list of available commands.\r\n>"):
                         break
+                elif data == 'q!\r\n':
+                    # If the user sends a q!, close the connection and remove from list
+                    print "Closed connection for %s:%s" % (address[0],address[1])
+                    del self.clients[clientsocket]
+                    break
+                elif data == 'help\r\n':
+                    # Display available commands
+                    clientsocket.send("Commands:\r\n")
+                    for verb in ["look - Who is online", "help - Display this.", "q! - Quit"]:
+                        clientsocket.send("  "+ verb +"\r\n")
+                    clientsocket.send(">")
+                elif data == 'look\r\n':
+                    # Show the connected clients
+                    clientsocket.send("There are %d users connected:\r\n" % len(self.clients))
+                    clientsocket.send("Name\tHost\t\tPort\r\n")
+                    clientsocket.send("-" * 40 +"\r\n")
+                    for clientIP, clientPort in self.clients.itervalues():
+                        clientsocket.send("Unknown\t"+ str(clientIP) +"\t"+ str(clientPort) +"\r\n")
+                    clientsocket.send(">")
+                else:
+                    # Send the message to all connected clients
+                    for client in self.clients:
+                        if client is clientsocket:
+                            if not client.send('\rYou said: %s>' % data):
+                                break
+                        else:
+                            if not client.send('\rClient %s said: %s>' % (address,data)):
+                                break
                 data = ''
             stackless.schedule()
         clientsocket.close()
