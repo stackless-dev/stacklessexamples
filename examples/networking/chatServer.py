@@ -27,7 +27,7 @@ import stacklesssocket
 sys.modules["socket"] = stacklesssocket
 import socket
 
-class Server():
+class Server(object):
     def __init__(self, conn):
         self.clients = {}
         # Create an INET, STREAMing socket
