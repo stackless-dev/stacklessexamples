@@ -69,7 +69,7 @@ def ScheduleTasklets():
     while n > 0:
         yieldChannel.send(None)
         n -= 1
-        
+
     CheckSleepingTasklets()
 
     # Run any tasklets which need to be scheduled.  As long as the BeNice and
@@ -81,7 +81,7 @@ def ScheduleTasklets():
     # in there too long then it is not yielding or is keeping the scheduler
     # running by using 'stackless.schedule' which is not compatible with the
     # way this method intends the scheduler to be used.
-    
+
     interruptedTasklet = stackless.run(1000000)
     if interruptedTasklet:
         # Should really print a stacktrace from the tasklet so it can be

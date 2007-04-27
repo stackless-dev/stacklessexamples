@@ -21,7 +21,7 @@ getaddrinfo = stdsocket.getaddrinfo
 _config = stackless._config
 
 def socket(*args):
-  if getattr(_config, "using_stackless"):
-    return stackless.socket(*args)
-  else:
-    return stdsocket.socket(*args)
+    if getattr(_config, "using_stackless"):
+        return stackless.socket(*args)
+    else:
+        return stdsocket.socket(*args)

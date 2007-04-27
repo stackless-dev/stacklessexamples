@@ -104,4 +104,3 @@ if __name__ == "__main__":
     print "Starting up server on IP:port %s:%s" % (host, port)
     s = Server((host,port))
     stackless.run()
-

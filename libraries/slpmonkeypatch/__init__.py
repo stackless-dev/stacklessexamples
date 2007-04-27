@@ -41,5 +41,3 @@ def monkeypatch():
 
     import socketmodule
     sys.modules["socket"] = socketmodule
-
-

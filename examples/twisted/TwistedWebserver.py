@@ -37,7 +37,7 @@ import stackless
 from twisted.web           import http
 
 class Server(object):
-    
+
     def execute(self, port, requestChannel):
         MyRequestHandler.requestChannel = requestChannel
         reactor.listenTCP(port, MyHttpFactory())
@@ -58,10 +58,10 @@ class Cgi(object):
             replyChannel.send("<html><body>" + \
                                self.name + "count :" + str(self.count) + \
             "</body></html>")
-            
+
             self.count = self.count + 1
             stackless.schedule()
-            
+
 
 def tick():
     count = 0
@@ -69,11 +69,11 @@ def tick():
         print "tick: ", count
         count += 1
         stackless.schedule()
-            
-            
+
+
 
 class MyRequestHandler(http.Request):
-    
+
     def process(self):
         """
         send back a unique channel that identifies the request handler
@@ -83,29 +83,29 @@ class MyRequestHandler(http.Request):
         result = replyChannel.receive()
         self.write(result)
         self.finish()
-        
-        
+
+
 class MyHttp(http.HTTPChannel):
     requestFactory = MyRequestHandler
-    
-    
+
+
 class MyHttpFactory(http.HTTPFactory):
     protocol = MyHttp
-    
-    
+
+
 if __name__ == "__main__":
     from twisted.internet import reactor
-    
+
     channel = stackless.channel()
-    
+
     cgiTasklet = Cgi("cgiTasklet-1", channel)
     server = Server()
-    
+
     stackless.tasklet(cgiTasklet.execute)()
     stackless.tasklet(server.execute)(8000, channel)
     print "Web Server started"
     stackless.tasklet(tick)()
-    
+
     print "entering main loop"
     while (stackless.getruncount() > 1):
-       stackless.schedule()
+        stackless.schedule()

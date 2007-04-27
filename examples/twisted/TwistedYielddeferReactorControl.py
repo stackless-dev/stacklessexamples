@@ -51,7 +51,7 @@ def frame():
     fps = (fps + d) / 2.0
     last_time = this_time
     print fps
-    
+
 
 # start the timer
 t = task.LoopingCall(frame)
@@ -60,19 +60,19 @@ t.start(1.0/ideal_fps)
 
 # a fake operation that returns a defered
 def deferredOp():
-    
+
     df = defer.Deferred()
 
     # complete in 0.5 seconds
     reactor.callLater(0.5, df.callback, "result!")
     # a deferred that completed already
     #df.callback("result!")
-    
+
     # we could also fake an error
     #reactor.callLater(0.5, df.errback, failure.Failure(Exception("failed")))
     # a deferred that failed already
     #df.errback(failure.Failure(Exception("failed")))
-    
+
     return df
 
 
@@ -90,7 +90,7 @@ class NWChannel(stackless.channel):
         if self.balance == 0:
             self.exc = (type, value)
         else:
-            self.send_exception(type, value)        
+            self.send_exception(type, value)
 
     def receive(self):
         if hasattr(self, 'value'):
@@ -102,7 +102,7 @@ class NWChannel(stackless.channel):
             del self.exc
             raise type, value
         return stackless.channel.receive(self)
-    
+
 
 def good(r, me, return_channel):
     return_channel.send_nowait(r)

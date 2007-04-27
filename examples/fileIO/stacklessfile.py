@@ -205,7 +205,7 @@ class stacklessfile(object):
         self.tell = self.f.tell
         self.truncate = self.f.truncate
         self.writelines = self.f.writelines
-        
+
 
     def read(self, *args, **kwargs):
         """
@@ -229,7 +229,7 @@ class stacklessfile(object):
         Calls the original file.next() method. This iterator calls the original
         file() iterator so it is advised that calls to the schedule() are made
         during the loop to allow other tasklets run.
-        
+
         Ex. for line in file:
                 print line
                 stackless.schedule()
@@ -289,4 +289,3 @@ if __name__ == '__main__':
         os.unlink(f)
     os.unlink('test.txt')
     os.unlink('test2.txt')
-

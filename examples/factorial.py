@@ -1,4 +1,4 @@
-# 
+#
 # Factorial example using stackless to break Python's recustion limit of 1000
 #
 # by Andrew Dalke

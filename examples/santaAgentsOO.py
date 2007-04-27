@@ -17,20 +17,20 @@ class Sleep(object):
 
     def ManageSleepingTasklets(self):
         while True:
-          if len(self.sleepingTasklets):
-              endTime = self.sleepingTasklets[0][0]
-              if endTime <= time.time():
-                  channel = self.sleepingTasklets[0][1]
-                  del self.sleepingTasklets[0]
-                  # We have to send something, but it doesn't matter what as it is not used.
-                  channel.send(None)
-              elif stackless.getruncount() == 1:
-                  # We are the only tasklet running, the rest are blocked on channels sleeping.
-                  # We can call time.sleep until the first awakens to avoid a busy wait.
-                  delay = endTime - time.time()
-                  #print "wait delay", delay
-                  time.sleep(max(delay,0))
-          stackless.schedule()
+            if len(self.sleepingTasklets):
+                endTime = self.sleepingTasklets[0][0]
+                if endTime <= time.time():
+                    channel = self.sleepingTasklets[0][1]
+                    del self.sleepingTasklets[0]
+                    # We have to send something, but it doesn't matter what as it is not used.
+                    channel.send(None)
+                elif stackless.getruncount() == 1:
+                    # We are the only tasklet running, the rest are blocked on channels sleeping.
+                    # We can call time.sleep until the first awakens to avoid a busy wait.
+                    delay = endTime - time.time()
+                    #print "wait delay", delay
+                    time.sleep(max(delay,0))
+            stackless.schedule()
 
 sleep = Sleep().Sleep
 
@@ -68,8 +68,8 @@ class secretary(Agent):
         visitor = self.ch.receive()
         self.visitors.append(visitor)
         if len(self.visitors) == self.count:
-          self.santa.ch.send((self.kind, self.visitors))
-          self.visitors = []
+            self.santa.ch.send((self.kind, self.visitors))
+            self.visitors = []
         stackless.schedule()
 
 class worker(Agent):
@@ -77,7 +77,7 @@ class worker(Agent):
         super(worker,self).__init__()
         self.sec = sec
         self.message = message
-        
+
     def action(self):
         sleep(random.randint(0, 3))
         self.sec.ch.send(self.ch)
@@ -89,12 +89,10 @@ if __name__ == '__main__':
     sa = santa()
     edna = secretary(sa, "elves", 3)
     robin = secretary(sa, "reindeer", 9)
-    
+
     for i in xrange(21):
         worker(edna, " Elf %d meeting in the study." % (i))
     for i in xrange(10):
         worker(robin, " Reindeer %d delivery toys." % (i))
 
     stackless.run()
-
-

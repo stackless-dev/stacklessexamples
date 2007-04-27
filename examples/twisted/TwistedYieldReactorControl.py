@@ -51,7 +51,7 @@ def frame():
     fps = (fps + d) / 2.0
     last_time = this_time
     print '\n', fps
-    
+
 
 # start the timer
 t = task.LoopingCall(frame)
@@ -63,7 +63,7 @@ def tasklet():
     while True:
         # complicated operation with side-effects
         sys.stdout.write('.')
-        
+
         # allow the reactor to run all pending events, then come back
         reactor.callLater(0, stackless.schedule)
         stackless.schedule()

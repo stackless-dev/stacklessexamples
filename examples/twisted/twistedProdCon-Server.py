@@ -1,6 +1,6 @@
 #
 # This example uses Stackless together with Twisted Perspective Broker(PB)
-# Perspective Broker (affectionately known as PB) is an asynchronous, 
+# Perspective Broker (affectionately known as PB) is an asynchronous,
 # symmetric network protocol for secure, remote method calls and transferring of objects.
 # PB has support for direct or authenticated sessions where the user receives a "Perspective"
 # containning the methods it could call.
@@ -49,20 +49,20 @@ class Sleep(object):
 
     def ManageSleepingTasklets(self):
         while True:
-          if len(self.sleepingTasklets):
-              endTime = self.sleepingTasklets[0][0]
-              if endTime <= time.time():
-                  channel = self.sleepingTasklets[0][1]
-                  del self.sleepingTasklets[0]
-                  # We have to send something, but it doesn't matter what as it is not used.
-                  channel.send(None)
-              elif stackless.getruncount() == 1:
-                  # We are the only tasklet running, the rest are blocked on channels sleeping.
-                  # We can call time.sleep until the first awakens to avoid a busy wait.
-                  delay = endTime - time.time()
-                  #print "wait delay", delay
-                  time.sleep(max(delay,0))
-          stackless.schedule()
+            if len(self.sleepingTasklets):
+                endTime = self.sleepingTasklets[0][0]
+                if endTime <= time.time():
+                    channel = self.sleepingTasklets[0][1]
+                    del self.sleepingTasklets[0]
+                    # We have to send something, but it doesn't matter what as it is not used.
+                    channel.send(None)
+                elif stackless.getruncount() == 1:
+                    # We are the only tasklet running, the rest are blocked on channels sleeping.
+                    # We can call time.sleep until the first awakens to avoid a busy wait.
+                    delay = endTime - time.time()
+                    #print "wait delay", delay
+                    time.sleep(max(delay,0))
+            stackless.schedule()
 
 Sleep = Sleep().Sleep
 
@@ -137,14 +137,14 @@ class MyPerspective(pb.Avatar):
     def perspective_put(self, arg):
         self.queue.put(arg)
         return arg
-        
+
     def perspective_get(self, arg):
         self.queue.get(arg)
         return arg
-    
+
 class MyRealm:
     '''
-    The realm handles the user authentications, we could have different 
+    The realm handles the user authentications, we could have different
     perspectives for the producer and the consumer where each would have
     access to its methods.
     '''
@@ -164,4 +164,3 @@ reactor.listenTCP(8800, pb.PBServerFactory(p))
 t = task.LoopingCall(stackless.schedule).start(0.0001)
 re = stackless.tasklet(reactor.run)()
 stackless.run()
-

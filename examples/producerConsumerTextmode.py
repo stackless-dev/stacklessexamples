@@ -1,4 +1,4 @@
-# 
+#
 # Almost the same Producer/Consumer example from PyQt but without
 # the graphical interface, the queue status is printed in console.
 #
@@ -35,30 +35,30 @@ def Sleep(secondsToWait):
 
 def ManageSleepingTasklets():
     while True:
-     if len(sleepingTasklets):
-       endTime = sleepingTasklets[0][0]
-       if endTime <= time.time():
-         channel = sleepingTasklets[0][1]
-         del sleepingTasklets[0]
-         # We have to send something, but it doesn't matter what as it is not used.
-         channel.send(None)
-       elif stackless.getruncount() == 1:
-         # We are the only tasklet running, the rest are blocked on channels sleeping.
-         # We can call time.sleep until the first awakens to avoid a busy wait.
-         delay = endTime - time.time()
-         #print "wait delay", delay
-         time.sleep(max(delay,0))
-     stackless.schedule()
+        if len(sleepingTasklets):
+            endTime = sleepingTasklets[0][0]
+            if endTime <= time.time():
+                channel = sleepingTasklets[0][1]
+                del sleepingTasklets[0]
+                # We have to send something, but it doesn't matter what as it is not used.
+                channel.send(None)
+            elif stackless.getruncount() == 1:
+                # We are the only tasklet running, the rest are blocked on channels sleeping.
+                # We can call time.sleep until the first awakens to avoid a busy wait.
+                delay = endTime - time.time()
+                #print "wait delay", delay
+                time.sleep(max(delay,0))
+        stackless.schedule()
 
 stackless.tasklet(ManageSleepingTasklets)()
 
 ##########################################################
 
 def printStatus(reporter):
-     print reporter + " " * (3 - len(reporter)) + "[" + "#" * len(queue) + " " * (q_size-len(queue))  + "] Qty:" , len(queue) , "\r",
-     time.sleep(0.05)  # so we have time to see the displayed data
-     # keep in mind that this call to time.sleep will stall
-     # all tasklets stop until time.sleep returns
+    print reporter + " " * (3 - len(reporter)) + "[" + "#" * len(queue) + " " * (q_size-len(queue))  + "] Qty:" , len(queue) , "\r",
+    time.sleep(0.05)  # so we have time to see the displayed data
+    # keep in mind that this call to time.sleep will stall
+    # all tasklets stop until time.sleep returns
 
 def producer(who,sleeptime):
     global full_queue
@@ -78,24 +78,24 @@ def producer(who,sleeptime):
 def consumer(who,sleeptime):
     global zero_queue
     while True:
-       if (len(queue) >= 1):
-           queue.pop()
-           c_counter[int(who)] += 1
-           printStatus('C'+who)
-           if len(queue) < q_size/4:
-               Sleep(sleeptime*1.5)
-           else:
-               Sleep(sleeptime)
-       else:
-           zero_queue += 1
-           stackless.schedule()
+        if (len(queue) >= 1):
+            queue.pop()
+            c_counter[int(who)] += 1
+            printStatus('C'+who)
+            if len(queue) < q_size/4:
+                Sleep(sleeptime*1.5)
+            else:
+                Sleep(sleeptime)
+        else:
+            zero_queue += 1
+            stackless.schedule()
 '''
 def watch():
     while True:
         if len(sleepingTasklets) <= 0:
         stackless.schedule()
 
-stackless.tasklet(watch)()	
+stackless.tasklet(watch)()
 '''
 
 def launch_p (ind,sleeptime):         # Launches and initializes the producers lists

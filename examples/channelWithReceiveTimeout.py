@@ -112,7 +112,7 @@ class TimeLimitedReceiveChannel(stackless.channel):
 
 def Run():
     c = TimeLimitedReceiveChannel()
-    
+
     def Test(c):
         global exitScheduler
         t = time.time()

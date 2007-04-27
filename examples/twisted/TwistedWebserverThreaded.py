@@ -42,7 +42,7 @@ import stackless
 from twisted.web           import http
 
 class Server(object):
-    
+
     def execute(self, port, requestChannel):
         MyRequestHandler.channel = requestChannel
         reactor.listenTCP(port, MyHttpFactory())
@@ -63,10 +63,10 @@ class Cgi(object):
             replyChannel.send("<html><body>" + \
                                self.name + " count :" + str(self.count) + \
             "</body></html>")
-            
+
             self.count = self.count + 1
             stackless.schedule()
-            
+
 
 def tick():
     count = 0
@@ -75,29 +75,29 @@ def tick():
         print count
         time.sleep(.005)
         stackless.schedule()
-            
-            
+
+
 
 class MyRequestHandler(http.Request):
-    
+
     def process(self):
         replyChannel = stackless.channel()
         channel.send(replyChannel)
         result = replyChannel.receive()
         self.write(result)
         self.finish()
-        
-        
+
+
 class MyHttp(http.HTTPChannel):
     requestFactory = MyRequestHandler
-    
-    
+
+
 class MyHttpFactory(http.HTTPFactory):
     protocol = MyHttp
 
-    
+
 def stacklessThread(requestChannel):
-    
+
     cgiTasklet = Cgi("cgiTasklet-1", requestChannel)
     stackless.tasklet(cgiTasklet.execute)()
 
@@ -107,21 +107,17 @@ def stacklessThread(requestChannel):
     last runnable tasklet (cgiTasklet) would be blocked
     """
     stackless.tasklet(tick)()
-        
+
     while (stackless.getruncount() > 1):
-          stackless.schedule()
-    
+        stackless.schedule()
+
 
 if __name__ == "__main__":
     from twisted.internet import reactor
-    
+
     print "ThreadedWebserver"
-    
+
     channel = stackless.channel()
     reactor.callInThread(stacklessThread,channel)
     Server().execute(8000, channel)
-    reactor.run()   
-    
-    
-    
-    
+    reactor.run()

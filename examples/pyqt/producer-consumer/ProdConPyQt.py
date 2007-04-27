@@ -38,20 +38,20 @@ class Sleep(object):
 
     def ManageSleepingTasklets(self):
         while True:
-          if len(self.sleepingTasklets):
-              endTime = self.sleepingTasklets[0][0]
-              if endTime <= time.time():
-                  channel = self.sleepingTasklets[0][1]
-                  del self.sleepingTasklets[0]
-                  # We have to send something, but it doesn't matter what as it is not used.
-                  channel.send(None)
-              elif stackless.getruncount() == 1:
-                  # We are the only tasklet running, the rest are blocked on channels sleeping.
-                  # We can call time.sleep until the first awakens to avoid a busy wait.
-                  delay = endTime - time.time()
-                  #print "wait delay", delay
-                  time.sleep(max(delay,0))
-          stackless.schedule()
+            if len(self.sleepingTasklets):
+                endTime = self.sleepingTasklets[0][0]
+                if endTime <= time.time():
+                    channel = self.sleepingTasklets[0][1]
+                    del self.sleepingTasklets[0]
+                    # We have to send something, but it doesn't matter what as it is not used.
+                    channel.send(None)
+                elif stackless.getruncount() == 1:
+                    # We are the only tasklet running, the rest are blocked on channels sleeping.
+                    # We can call time.sleep until the first awakens to avoid a busy wait.
+                    delay = endTime - time.time()
+                    #print "wait delay", delay
+                    time.sleep(max(delay,0))
+            stackless.schedule()
 
 Sleep = Sleep().Sleep
 
@@ -170,7 +170,7 @@ class mainWindow(QtGui.QMainWindow):
         except: pass
 
     def start(self):
-        if self.started: 
+        if self.started:
             self.q.running = True
             self.ui.statusbar.showMessage("Running")
             return
@@ -179,21 +179,21 @@ class mainWindow(QtGui.QMainWindow):
         self.q.running = True
         self.monit = stackless.tasklet(self.monitor)()
         self.ui.queue.setMaximum(self.q.max_size)
-        
+
         for i in range(num_prod):
             self.addprod()
 
         for i in range(num_cons):
-            self.addcons()       
-       
+            self.addcons()
+
         self.ui.statusbar.showMessage("Running")
         stackless.run()
-        
+
 
     def stop(self):
         self.q.running = False
         self.ui.statusbar.showMessage("Stopped")
-        
+
     def addprod(self):
         ID = self.PID
         name = "P"+str(ID)
@@ -205,10 +205,10 @@ class mainWindow(QtGui.QMainWindow):
         name = "C"+str(ID)
         a = Consumer(name, self.q)
         self.CID += 1
-        
+
     def addtoqueue(self):
         self.q.qt += 10
-        
+
     def monitor(self):
         while not self.killtasks:
             QtGui.QApplication.processEvents()
@@ -217,7 +217,7 @@ class mainWindow(QtGui.QMainWindow):
             self.ui.cons.setText(str(len(self.q.consumers)))
             Sleep(0.033)
             #stackless.schedule()
-        
+
     def showReport(self):
         print
         print "--------------------------"
@@ -236,7 +236,7 @@ class mainWindow(QtGui.QMainWindow):
         print
         print "--------------------------"
 
-        
+
 
 ###########################################################
 
@@ -252,16 +252,3 @@ def main(args):
 
 if __name__=="__main__":
     main(sys.argv)
-
-
-
-
-
-
-
-
-
-
-
-
-

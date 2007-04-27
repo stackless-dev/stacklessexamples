@@ -813,7 +813,7 @@ def ParallelHelper(ch,idx,what):
                 ch.send((0,ei))
         del ei
     finally:
-       RemoveCurrentSynonymOf(threadid)
+        RemoveCurrentSynonymOf(threadid)
 
 def Parallel(funcs,exceptionHandler=None,maxcount=30):
     '''

@@ -187,7 +187,7 @@ class dispatcher(asyncore.dispatcher):
         if waitChannel is None:
             waitChannel = stackless.channel()
             self.sendToBuffers.append((sendData, sendAddress, waitChannel, 0))
-        return waitChannel.receive()        
+        return waitChannel.receive()
 
     # Read at most byteCount bytes.
     def recv(self, byteCount):
@@ -433,7 +433,7 @@ if __name__ == '__main__':
                     #print "waiting for connection test", i
                     #currentSocket, clientAddress = listenSocket.accept()
                     #print "received connection", i, "from", clientAddress
-                    
+
                     print "waiting to receive"
                     t = listenSocket.recvfrom(256)
                     cnt += len(t[0])
@@ -446,7 +446,7 @@ if __name__ == '__main__':
                 # clientSocket.connect(address)
                 print "sending 512 byte packet"
                 sentBytes = clientSocket.sendto("-"+ ("*" * 510) +"-", address)
-                print "sent 512 byte packet", sentBytes 
+                print "sent 512 byte packet", sentBytes
 
             stackless.tasklet(UDPServer)(address)
             stackless.tasklet(UDPClient)(address)
@@ -475,7 +475,7 @@ if __name__ == '__main__':
             print "server exited"
         else:
             print "Usage:", sys.argv[0], "[client|server|slpclient|slpserver]"
-    
+
         sys.exit(1)
     else:
         stackless.tasklet(TestTCPServer)(testAddress)

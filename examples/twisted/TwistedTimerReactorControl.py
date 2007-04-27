@@ -44,7 +44,7 @@ def frame():
     fps = (fps + d) / 2.0
     last_time = this_time
     print fps
-    
+
     # allow tasklets to run
     stackless.schedule()
 
@@ -58,7 +58,7 @@ def tasklet():
     while True:
         # complicated operation with side-effects
         print 'do-op'
-        
+
         # allow the reactor to resume
         stackless.schedule()
 

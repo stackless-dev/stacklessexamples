@@ -1,6 +1,6 @@
 #
 # This example uses Stackless together with Twisted Perspective Broker(PB)
-# Perspective Broker (affectionately known as PB) is an asynchronous, 
+# Perspective Broker (affectionately known as PB) is an asynchronous,
 # symmetric network protocol for secure, remote method calls and transferring of objects.
 # PB has support for direct or authenticated sessions where the user receives a "Perspective"
 # containning the methods it could call.
@@ -50,20 +50,20 @@ class Sleep(object):
 
     def ManageSleepingTasklets(self):
         while True:
-          if len(self.sleepingTasklets):
-              endTime = self.sleepingTasklets[0][0]
-              if endTime <= time.time():
-                  channel = self.sleepingTasklets[0][1]
-                  del self.sleepingTasklets[0]
-                  # We have to send something, but it doesn't matter what as it is not used.
-                  channel.send(None)
-              elif stackless.getruncount == 1:
-                  # We are the only tasklet running, the rest are blocked on channels sleeping.
-                  # We can call time.sleep until the first awakens to avoid a busy wait.
-                  delay = endTime - time.time()
-                  #print "wait delay", delay
-                  time.sleep(max(delay,0))
-          stackless.schedule()
+            if len(self.sleepingTasklets):
+                endTime = self.sleepingTasklets[0][0]
+                if endTime <= time.time():
+                    channel = self.sleepingTasklets[0][1]
+                    del self.sleepingTasklets[0]
+                    # We have to send something, but it doesn't matter what as it is not used.
+                    channel.send(None)
+                elif stackless.getruncount == 1:
+                    # We are the only tasklet running, the rest are blocked on channels sleeping.
+                    # We can call time.sleep until the first awakens to avoid a busy wait.
+                    delay = endTime - time.time()
+                    #print "wait delay", delay
+                    time.sleep(max(delay,0))
+            stackless.schedule()
 
 Sleep = Sleep().Sleep
 
@@ -127,7 +127,7 @@ def blockOn(d, timeout=999):
 
     def cancelTimeout():
         if delayedCall.active():
-           delayedCall.cancel()
+            delayedCall.cancel()
 
     delayedCall = reactor.callLater(timeout, onTimeout, me, ch)
     d.addCallback(goodCB, me, ch)
@@ -157,8 +157,8 @@ class Agent(object):
             print "Connection could not be opened."
             exit()
         except "TimeoutException":
-               print "Timeout exception"
-               exit()
+            print "Timeout exception"
+            exit()
         except:
             print "MISC ERROR"
             exit()
@@ -166,12 +166,12 @@ class Agent(object):
         #print "got perspective ref:", self.perspective
         self.connected = 1
         self.kill = False
-        
+
         def1 = self.perspective.callRemote("getqueuesize")
         self.qmaxsize = blockOn(def1)
         while not self.kill:
             self.action()
-    
+
     def action(self):
         pass
 
@@ -209,7 +209,7 @@ class Producer(Agent):
 class Consumer(Agent):
     def __init__(self, name, login, password):
         Agent.__init__(self, name, login, password)
-    
+
     def action(self):
         # gets the queue size for the first time
         def1 = self.perspective.callRemote("getqueue")
