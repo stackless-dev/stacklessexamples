@@ -42,6 +42,7 @@
 import stackless
 import random
 import md5
+import time
 
 from cgi import parse_qs
 
@@ -61,9 +62,12 @@ class SessionlessApp(object):
     """A WSGI application that allows for controllers that span
     multiple requests"""
     
+    # Timeout in seconds for continuations
+    continuation_timeout = 300
+    
     def __init__(self):
-        # This dict maps continuation ids to channels that we must
-        # send() on to resume the relevant controller.
+        # This dict maps continuation ids to registration times and
+        # channels that we must send() on to resume the relevant controller.
         self.continuations = dict()
     
     def __call__(self, environ, start_response):
@@ -72,6 +76,9 @@ class SessionlessApp(object):
         and if it is, we wake it up so that it can continue.
         Otherwise, a new tasklet is created and an appropriately selected controller
         is called from that tasklet"""
+        
+        # Expire old continuations
+        self.prune_old_continuations()
         
         # This channel serves the purpose of passing the data to be returned
         # to the HTTP client from the controller to the application. This is
@@ -84,7 +91,7 @@ class SessionlessApp(object):
             # controller associated with it.
             try:
                 key = parameters['__wc'][0]
-                continuation_channel = self.continuations[key]
+                reg_time, continuation_channel = self.continuations[key]
                 
                 # Remove the channel from the continuations map and resume
                 # it by giving it the new data channel and parameters
@@ -126,8 +133,15 @@ class SessionlessApp(object):
         map with that id. Returns the channel, which will we will send() on when
         a continuing http request arrives."""
         ch = stackless.channel()
-        self.continuations[id] = ch
+        self.continuations[id] = (time.time(), ch)
         return ch
+    
+    def prune_old_continuations(self):
+        for key in self.continuations.keys():
+            t, c = self.continuations[key]
+            if t + self.continuation_timeout < time.time():
+                c.send_exception(TimeoutException)
+                del self.continuations[key]
 
 
 class SessionlessRequest(object):
