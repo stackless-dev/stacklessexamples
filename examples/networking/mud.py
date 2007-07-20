@@ -88,9 +88,7 @@ class User:
         return True
 
     def OnRemoteDisconnection(self):
-        # This is no longer valid, clear it.
         logging.info("Disconnected %d (remote)", id(self))
-        self.connection = None
 
     def OnUserDisconnection(self):
         logging.info("Disconnected %d (local)", id(self))
