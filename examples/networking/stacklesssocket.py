@@ -53,7 +53,17 @@ else:
 # urllib2 apparently uses this directly.  We need to cater for that.
 _fileobject = stdsocket._fileobject
 
-
+# Someone needs to invoke asyncore.poll() regularly to keep the socket
+# data moving.  The "ManageSockets" function here is a simple example
+# of such a function.  It is started by StartManager(), which uses the
+# global "managerRunning" to ensure that no more than one copy is
+# running.
+#
+# If you think you can do this better, register an alternative to
+# StartManager using stacklesssocket_manager().  Your function will be
+# called every time a new socket is created; it's your responsibility
+# to ensure it doesn't start multiple copies of itself unnecessarily.
+#
 
 managerRunning = False
 
@@ -68,15 +78,28 @@ def ManageSockets():
 
     managerRunning = False
 
+def StartManager():
+    global managerRunning
+    if not managerRunning:
+        managerRunning = True
+        stackless.tasklet(ManageSockets)()
+
+_manage_sockets_func = StartManager
+
+def stacklesssocket_manager(mgr):
+    global _manage_sockets_func
+    _manage_sockets_func = mgr
+
+#
+# Replacement for standard socket() constructor.
+#
 def socket(family=AF_INET, type=SOCK_STREAM, proto=0):
     global managerRunning
 
     currentSocket = stdsocket.socket(family, type, proto)
     ret = stacklesssocket(currentSocket)
     # Ensure that the sockets actually work.
-    if not managerRunning:
-        managerRunning = True
-        stackless.tasklet(ManageSockets)()
+    _manage_sockets_func()
     return ret
 
 # This is a facade to the dispatcher object.
