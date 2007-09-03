@@ -1,7 +1,13 @@
 #
 # Stackless Asynchronous file module:
 #
-# Author: Carlos E. de Paula <carlosedp@gmail.com>
+# Author:Richard Tew (IOCP.py)
+#        Carlos E. de Paula <carlosedp@gmail.com>
+#
+# This module has been heavily based on Richard Tew's work on IOCP.py
+# Here the manager runs in a tasklet and write function works expectdly.
+# I have added a sleep function like the one found on Ed Faulkner as a
+# convenience if you dont have one implemented.
 #
 # This code was written to serve as an example of Stackless Python usage.
 # Feel free to email me with any questions, comments, or suggestions for
@@ -15,12 +21,9 @@
 import os
 import time
 import stackless
+from heapq import heappush, heappop
 from ctypes import *
 from ctypes.wintypes import HANDLE, ULONG, DWORD, BOOL, LPCSTR, LPCWSTR, WinError
-
-# Verify module compatibility
-if os.name != 'nt':
-    raise ImportError('This module has been implemented for windows systems.')
 
 # Windows structures
 
@@ -130,6 +133,7 @@ class resultsManager(object):
         self.numThreads = numThreads
         stackless.tasklet(self.poll)()
         self.overlappedByID = {}
+        self._sleepers = []
 
     def __del__(self):
         if self.handle is None:
@@ -137,8 +141,15 @@ class resultsManager(object):
         self.overlappedByID.clear()
         CloseHandle(self.handle)
 
+    def _check_running(self):
+        if not self.running:
+            stackless.tasklet(self.poll)()
+            self.running = True
+            #print "ERROR - Manager not running"
+
     def poll(self, timeout=1):
-        while self.running and self.overlappedByID:
+        while self.running and (self.overlappedByID or self._sleepers):
+            self._check_sleepers()
             numBytes = DWORD()
             completionKey = c_ulong()
             ovp = POINTER(OVERLAPPED)()
@@ -166,6 +177,18 @@ class resultsManager(object):
 
         self.running = False
 
+    def _check_sleepers(self):
+        now = time.time()
+        while self._sleepers and self._sleepers[0][0] < now:
+            waketime, chan = heappop(self._sleepers)
+            # Only send if someone is waiting to receive (in some
+            # cases the tasklet in question will already have been
+            # awoken elsewhere)
+            if chan.balance < 0:
+                chan.send(None)
+        #if self._sleepers:
+        #    return self._sleepers[0][0]
+
     def RegisterChannelObject(self, ob, c):
         self.overlappedByID[ob] = c
 
@@ -173,10 +196,18 @@ class resultsManager(object):
         if self.overlappedByID.has_key(ob):
             del self.overlappedByID[ob]
 
+    def sleep(self, seconds, channel = None):
+        waketime = time.time() + seconds
+        if channel is None:
+            channel = stackless.channel()
+        heappush(self._sleepers, (waketime, channel))
+        self._check_running()
+        channel.receive()
+
 
 mng = resultsManager()
 
-class stacklessfile(object):
+class stacklessfileIOCP(object):
     """
     stacklessfile(name[, mode[, buffering]]) -> stackless file object
 
@@ -211,7 +242,7 @@ class stacklessfile(object):
         self.softspace = 0
         self.offset = 0
         self.iocpLinked = False
-        self._check_manager()
+        mng._check_running()
         self.open_handle()
         self.closed = False
 
@@ -223,12 +254,6 @@ class stacklessfile(object):
 
     def __exit__(self, *args):
         self.close()
-
-    def _check_manager(self):
-        if not mng.running:
-            stackless.tasklet(mng.poll)()
-            mng.running = True
-            #print "ERROR - Manager not running"
 
     def _check_still_open(self):
         if self.closed:
@@ -302,7 +327,7 @@ class stacklessfile(object):
         self.buffer = create_string_buffer(size)
         self.channel = stackless.channel()
         self._ensure_iocp_association()
-        self._check_manager()
+        mng._check_running()
 
         #print self.o.taskletID, "ID on read", self.name
         #print "firing ReadFile", self.name
@@ -336,7 +361,7 @@ class stacklessfile(object):
         self.o.taskletID = id(self)
         self.channel = stackless.channel()
         self._ensure_iocp_association()
-        self._check_manager()
+        mng._check_running()
         #print self.o.taskletID, "ID on write", self.name
 
         fmt = self.binary and "s#" or "t#"
@@ -416,6 +441,16 @@ class stacklessfile(object):
         return False
 
 
+#----------------------------------------------------------------------------
+# Verify module compatibility
+
+if os.name == 'nt':
+    stacklessfile = stacklessfileIOCP
+else:
+    raise ImportError('Your operating system is not supported.')
+
+#----------------------------------------------------------------------------
+
 if __name__ == '__main__':
     import time
     import glob
@@ -423,9 +458,14 @@ if __name__ == '__main__':
     stdfile = file
 
     # On your stackless apps, use these 2 lines below
-    from stacklessfile import stacklessfile as file
-    open = file
+    
+    #from stacklessfileIOCP import stacklessfile as file
+    #open = file
 
+    file = stacklessfile
+    open = file
+    sleep = mng.sleep
+    
     # Function to copy a file
     def copyfile(who, infile, out):
         st = time.time()
@@ -456,6 +496,14 @@ if __name__ == '__main__':
 
     for i in xrange(1,21):
         stackless.tasklet(copyfile)(i, 'test-small.txt','sm%s.txt' % i)
+
+    def sl(s):
+        st = time.time()
+        print "Sleeping for %s seconds" % s
+        sleep(s)
+        print "returned %s seconds later (real: %s)" % (s, time.time()-st)
+        
+    #stackless.tasklet(sl)(3)
 
     st = time.time()
     stackless.run()
