@@ -37,6 +37,8 @@ if "__all__" in stdsocket.__dict__:
     for k, v in stdsocket.__dict__.iteritems():
         if k in __all__:
             globals()[k] = v
+        elif k == "EBADF":
+            globals()[k] = v
 else:
     for k, v in stdsocket.__dict__.iteritems():
         if k.upper() == k:
@@ -187,6 +189,8 @@ class dispatcher(asyncore.dispatcher):
             self.connectChannel.receive()
 
     def send(self, data):
+        if self.sendBuffer is None:
+            raise error(EBADF, 'Bad file descriptor')
         self.sendBuffer += data
         stackless.schedule()
         return len(data)
