@@ -218,41 +218,25 @@ class dispatcher(asyncore.dispatcher):
 
     # Read at most byteCount bytes.
     def recv(self, byteCount):
-        if len(self.readBufferString) < byteCount:
-            # If our buffer is empty, we must block for more data we also
-            # aggressively request more if it's available.
-            if len(self.readBufferString) == 0 or self.recvChannel.balance > 0:
-                self.readBufferString += self.recvChannel.receive()
-        # Disabling this because I believe it is the onus of the application
-        # to be aware of the need to run the scheduler to give other tasklets
-        # leeway to run.
-        # stackless.schedule()
+        # recv() must not concatenate two or more data fragments sent with
+        # send() on the remote side. Single fragment sent with single send()
+        # call should be split into strings of length less than or equal
+        # to 'byteCount', and returned by one or more recv() calls.
+        if not self.readBufferString:
+            self.readBufferString += self.recvChannel.receive()
         ret = self.readBufferString[:byteCount]
         self.readBufferString = self.readBufferString[byteCount:]
+        # ret will be '' when EOF.
         return ret
 
     def recvfrom(self, byteCount):
-        ret = ""
-        address = None
-        while 1:
-            while len(self.readBufferList):
-                data, dataAddress = self.readBufferList[0]
-                if address is None:
-                    address = dataAddress
-                elif address != dataAddress:
-                    # They got all the sequential data from the given address.
-                    return ret, address
+        if self.socket.type == SOCK_STREAM:
+            return self.recv(byteCount), None
 
-                ret += data
-                if len(ret) >= byteCount:
-                    # We only partially used up this data.
-                    self.readBufferList[0] = ret[byteCount:], address
-                    return ret[:byteCount], address
-
-                # We completely used up this data.
-                del self.readBufferList[0]
-
-            self.readBufferList.append(self.recvChannel.receive())
+        # recvfrom() must not concatenate two or more packets.
+        # Each call should return the first 'byteCount' part of the packet.
+        data, address = self.recvChannel.receive()
+        return data[:byteCount], address
 
     def close(self):
         asyncore.dispatcher.close(self)
@@ -454,19 +438,16 @@ if __name__ == '__main__':
                 listenSocket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
                 listenSocket.bind(address)
 
-                i = 1
-                cnt = 0
-                while 1:
-                    #print "waiting for connection test", i
-                    #currentSocket, clientAddress = listenSocket.accept()
-                    #print "received connection", i, "from", clientAddress
-
-                    print "waiting to receive"
-                    t = listenSocket.recvfrom(256)
-                    cnt += len(t[0])
-                    print "received", t[0], cnt
-                    if cnt == 512:
-                        break
+                # Apparently each call to recvfrom maps to an incoming
+                # packet and if we only ask for part of that packet, the
+                # rest is lost.  We really need a proper unittest suite
+                # which tests this module against the normal socket
+                # module.
+                print "waiting to receive"
+                data, address = listenSocket.recvfrom(256)
+                print "received", data, len(data)
+                if len(data) != 256:
+                    raise StandardError("Unexpected UDP packet size")
 
             def UDPClient(address):
                 clientSocket = socket(AF_INET, SOCK_DGRAM)
