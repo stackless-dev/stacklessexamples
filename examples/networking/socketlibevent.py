@@ -64,9 +64,14 @@ def ManageSockets():
 
     managerRunning = False
 
+def die():
+    global sockets
+    sockets = []
+
 def StartManager():
     global managerRunning
     if not managerRunning:
+        event.signal(2, die)
         managerRunning = True
         stackless.tasklet(ManageSockets)()
 
