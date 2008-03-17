@@ -148,6 +148,7 @@ class dispatcher(asyncore.dispatcher):
     connectChannel = None
     acceptChannel = None
     recvChannel = None
+    wasConnected = False
 
     def __init__(self, sock):
         # This is worth doing.  I was passing in an invalid socket which was
@@ -218,6 +219,14 @@ class dispatcher(asyncore.dispatcher):
 
     # Read at most byteCount bytes.
     def recv(self, byteCount):
+        # Sockets which have never been connected do this.
+        if not self.wasConnected:
+            raise error(10057, 'Socket is not connected')
+        
+        # Sockets which were connected, but no longer are, do this.
+        if not self.connected:
+            return ""
+
         # recv() must not concatenate two or more data fragments sent with
         # send() on the remote side. Single fragment sent with single send()
         # call should be split into strings of length less than or equal
@@ -271,6 +280,7 @@ class dispatcher(asyncore.dispatcher):
     # Inform the blocked connect call that the connection has been made.
     def handle_connect(self):
         if self.socket.type != SOCK_DGRAM:
+            self.wasConnected = True
             self.connectChannel.send(None)
 
     # Asyncore says its done but self.readBuffer may be non-empty
