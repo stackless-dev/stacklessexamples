@@ -57,16 +57,18 @@ _fileobject = stdsocket._fileobject
 
 # Event Loop:
 def ManageSockets():
-    while len(sockets):
+    while managerRunning: #len(sockets):
         #print "event loop"
-        event.loop()
+        event.loop(True)
         stackless.schedule()
 
-    managerRunning = False
+    #managerRunning = False
 
 def die():
-    global sockets
-    sockets = []
+    #global sockets
+    #sockets = []
+    global managerRunning
+    managerRunning = False
 
 def StartManager():
     global managerRunning
@@ -143,10 +145,12 @@ class evSocket(object):
     
         # XXX There just might be a better way to do this:
         while self.receiving:
-            # Tweaking this value for performance has yet to be conclusive ;-)
-            sleep(.5) 
+            # Busy wait; sleeping was too slow; duh
+            stackless.schedule()
+            continue
         
-        self.connected = False
+        self.is_connected = False
+        self.was_connected = False
         self.sending = False  # breaks the loop in sendall
 
         global sockets
@@ -164,7 +168,10 @@ class evSocket(object):
             self.recvChannel.send("")
     
     def connect(self, address):
-        while not self.connected:
+        stackless.tasklet(self.handle_connect)(address)
+    
+    def handle_connect(self, address):
+        while not self.is_connected:
             err = self.sock.connect_ex(address)
             
             if err in (EINPROGRESS, EALREADY, EWOULDBLOCK):
@@ -172,7 +179,8 @@ class evSocket(object):
                 continue
                 
             if err in (0, EISCONN):
-                self.connected = True
+                self.is_connected = True
+                self.was_connected = True
                 self.address = address
             else:
                 raise socket.error, (err, errorcode[err])
@@ -181,12 +189,21 @@ class evSocket(object):
         err = self.sock.connect_ex(address)
         
         if err in (0, EISCONN):
-            self.connected = True
+            self.is_connected = True
+            self.was_connected = True
             self.address = address
         
         return err
     
     def recv(self, byteCount):
+        # Sockets which have never been connected do this.
+        if not self.was_connected:
+            raise error(10057, 'Socket is not connected')
+        
+        # Sockets which were connected, but no longer are, do this.
+        if not self.is_connected:
+            return ""
+        
         self.receiving = True
         
         def cb():
