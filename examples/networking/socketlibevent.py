@@ -169,7 +169,7 @@ class evSocket(object):
         stackless.tasklet(self.handle_connect)(address)
     
     def handle_connect(self, address):
-        while not self.is_connected:
+        while not self.connected:
             err = self.sock.connect_ex(address)
             
             if err in (EINPROGRESS, EALREADY, EWOULDBLOCK):
