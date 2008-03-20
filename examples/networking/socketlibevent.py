@@ -127,6 +127,8 @@ class evSocket(object):
             
         def cb(ev, sock, event_type, *arg):
             s, a = self.sock.accept()
+            s = evSocket(s)
+            sockets.append(s)
             self.acceptChannel.send((s, a))
             
         event.event(cb, handle=self.sock, evtype=event.EV_READ |
@@ -231,7 +233,7 @@ class evSocket(object):
         return self.sendChannel.receive()
     
     def sendall(self, data):
-        stackless.tasklet(handle_sendall)(data)
+        stackless.tasklet(self.handle_sendall)(data)
     
     def handle_sendall(self, data):
         self.sending = True
