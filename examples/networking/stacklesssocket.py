@@ -220,8 +220,8 @@ class dispatcher(asyncore.dispatcher):
     # Read at most byteCount bytes.
     def recv(self, byteCount):
         # Sockets which have never been connected do this.
-        if not self.wasConnected:
-            raise error(10057, 'Socket is not connected')
+        #if not self.wasConnected:
+        #    raise error(10057, 'Socket is not connected')
         
         # Sockets which were connected, but no longer are, do this.
         if not self.connected:
