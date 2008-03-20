@@ -149,8 +149,6 @@ class evSocket(object):
             stackless.schedule()
             continue
         
-        self.is_connected = False
-        self.was_connected = False
         self.sending = False  # breaks the loop in sendall
 
         global sockets
@@ -179,8 +177,6 @@ class evSocket(object):
                 continue
                 
             if err in (0, EISCONN):
-                self.is_connected = True
-                self.was_connected = True
                 self.address = address
             else:
                 raise socket.error, (err, errorcode[err])
@@ -189,21 +185,11 @@ class evSocket(object):
         err = self.sock.connect_ex(address)
         
         if err in (0, EISCONN):
-            self.is_connected = True
-            self.was_connected = True
             self.address = address
         
         return err
     
     def recv(self, byteCount):
-        # Sockets which have never been connected do this.
-        if not self.was_connected:
-            raise error(10057, 'Socket is not connected')
-        
-        # Sockets which were connected, but no longer are, do this.
-        if not self.is_connected:
-            return ""
-        
         self.receiving = True
         
         def cb():
