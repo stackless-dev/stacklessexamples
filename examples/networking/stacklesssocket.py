@@ -144,6 +144,19 @@ class stacklesssocket(object):
         return stdsocket._fileobject(self, mode, bufsize)
 
 
+def check_still_connected(f):
+    " Decorate socket functions to check they are still connected. "
+    def new_f(self, *args, **kwds):
+        if not self.connected:
+            # The socket was never connected.
+            if not self.wasConnected:
+                raise error(10057, "Socket is not connected")
+            # The socket has been closed already.
+            raise error(EBADF, 'Bad file descriptor')
+        return f(self, *args, **kwds)
+    return new_f
+
+
 class dispatcher(asyncore.dispatcher):
     connectChannel = None
     acceptChannel = None
@@ -189,13 +202,13 @@ class dispatcher(asyncore.dispatcher):
                 self.connectChannel.preference = 1
             self.connectChannel.receive()
 
+    @check_still_connected
     def send(self, data):
-        if self.sendBuffer is None:
-            raise error(EBADF, 'Bad file descriptor')
         self.sendBuffer += data
         stackless.schedule()
         return len(data)
 
+    @check_still_connected
     def sendall(self, data):
         # WARNING: this will busy wait until all data is sent
         # It should be possible to do away with the busy wait with
