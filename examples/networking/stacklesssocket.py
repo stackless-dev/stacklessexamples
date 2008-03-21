@@ -232,19 +232,23 @@ class dispatcher(asyncore.dispatcher):
 
     # Read at most byteCount bytes.
     def recv(self, byteCount):        
-        if not self.connected:
-            # Sockets which have never been connected do this.
-            if not self.wasConnected:
-                raise error(10057, 'Socket is not connected')
-            # Sockets which were connected, but no longer are, do this.
-            return ""
-
         # recv() must not concatenate two or more data fragments sent with
         # send() on the remote side. Single fragment sent with single send()
         # call should be split into strings of length less than or equal
         # to 'byteCount', and returned by one or more recv() calls.
-        if self.readIdx == len(self.readString):            
-            self.readString += self.recvChannel.receive()
+
+        if not self.connected:
+            # Sockets which have never been connected do this.
+            if not self.wasConnected:
+                raise error(10057, 'Socket is not connected')
+
+            # Sockets which were connected, but no longer are, use
+            # up the remaining input.  Observed this with urllib.urlopen
+            # where it closes the socket and then allows the caller to
+            # use a file to access the body of the web page.
+        elif self.readIdx == len(self.readString):            
+            self.readString = self.recvChannel.receive()
+            self.readIdx = 0
 
         if byteCount == 1:
             ret = self.readString[self.readIdx]
