@@ -175,8 +175,8 @@ class dispatcher(asyncore.dispatcher):
         #    self.dgramReadBuffers = {}
         #else:
         self.recvChannel = stackless.channel()
-        self.readBufferString = ''
-        self.readBufferList = []
+        self.readString = ''
+        self.readIdx = 0
 
         self.sendBuffer = ''
         self.sendToBuffers = []
@@ -243,10 +243,21 @@ class dispatcher(asyncore.dispatcher):
         # send() on the remote side. Single fragment sent with single send()
         # call should be split into strings of length less than or equal
         # to 'byteCount', and returned by one or more recv() calls.
-        if not self.readBufferString:
-            self.readBufferString += self.recvChannel.receive()
-        ret = self.readBufferString[:byteCount]
-        self.readBufferString = self.readBufferString[byteCount:]
+        if self.readIdx == len(self.readString):            
+            self.readString += self.recvChannel.receive()
+
+        if byteCount == 1:
+            ret = self.readString[self.readIdx]
+            self.readIdx += 1
+        elif self.readIdx == 0 and byteCount >= len(self.readString):
+            ret = self.readString
+            self.readString = ""
+        else:
+            idx = self.readIdx + byteCount
+            ret = self.readString[self.readIdx:idx]
+            self.readString = self.readString[idx:]
+            self.readIdx = 0
+
         # ret will be '' when EOF.
         return ret
 
