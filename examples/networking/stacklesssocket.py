@@ -298,6 +298,8 @@ class dispatcher(asyncore.dispatcher):
             currentSocket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
             # Give them the asyncore based socket, not the standard one.
             currentSocket = self.wrap_accept_socket(currentSocket)
+            # Need to ensure we flag the dispatcher as connected.
+            currentSocket.dispatcher.wasConnected = True
             stackless.tasklet(self.acceptChannel.send)((currentSocket, clientAddress))
 
     # Inform the blocked connect call that the connection has been made.
