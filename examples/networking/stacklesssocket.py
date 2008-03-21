@@ -218,13 +218,12 @@ class dispatcher(asyncore.dispatcher):
         return waitChannel.receive()
 
     # Read at most byteCount bytes.
-    def recv(self, byteCount):
-        # Sockets which have never been connected do this.
-        #if not self.wasConnected:
-        #    raise error(10057, 'Socket is not connected')
-        
-        # Sockets which were connected, but no longer are, do this.
+    def recv(self, byteCount):        
         if not self.connected:
+            # Sockets which have never been connected do this.
+            if not self.wasConnected:
+                raise error(10057, 'Socket is not connected')
+            # Sockets which were connected, but no longer are, do this.
             return ""
 
         # recv() must not concatenate two or more data fragments sent with
