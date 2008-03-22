@@ -10,9 +10,15 @@
 ################################################################################
 
 
-import traceback
+import sys, time, traceback
 import stackless
-import event
+
+try:
+    import event
+except:
+    print "This module requires pyEvent and libevent"
+    sys.exit()
+
 import socket as stdsocket
 
 from errno import EALREADY, EINPROGRESS, EWOULDBLOCK, ECONNRESET, \
@@ -57,16 +63,13 @@ _fileobject = stdsocket._fileobject
 
 # Event Loop:
 def ManageSockets():
-    while managerRunning: #len(sockets):
-        #print "event loop"
+    while managerRunning:
+        #print len(sockets), "sockets", time.time()
         event.loop(True)
+        #time.sleep(2)
         stackless.schedule()
 
-    #managerRunning = False
-
 def die():
-    #global sockets
-    #sockets = []
     global managerRunning
     managerRunning = False
 
@@ -94,12 +97,13 @@ class evSocket(object):
     """a pyEvent based socket proxy object"""
     
     address = None
-    connected = False
-    sending = False
-    receiving = True
     acceptChannel = None
     recvChannel = None
-    
+    accepting = False
+    connected = False
+    sending = False
+    receiving = False
+        
     def __init__(self, sock):
         # Assert that we have a real socket, not a proxy object
         if not isinstance(sock, stdsocket.socket):
@@ -114,27 +118,29 @@ class evSocket(object):
         if not attr.startswith('__'):
             return getattr(self.sock, attr)        
 
+    # XXX _fileobject probably needs proxying
     def makefile(self, mode='r', bufsize=-1):
         return stdsocket._fileobject(self, mode, bufsize)
 
     def accept(self):
-    
-        # For some reason this option degrades performance
-        self.sock.setsockopt(stdsocket.SOL_SOCKET, stdsocket.SO_REUSEADDR, 1)
-        
         if not self.acceptChannel:
             self.acceptChannel = stackless.channel()
             
-        def cb(ev, sock, event_type, *arg):
-            s, a = self.sock.accept()
-            s = evSocket(s)
-            sockets.append(s)
-            self.acceptChannel.send((s, a))
-            
-        event.event(cb, handle=self.sock, evtype=event.EV_READ |
-                                                 event.EV_PERSIST).add()
+        if not self.accepting:
+            event.event(self.handle_accept, handle=self.sock,
+                        evtype=event.EV_READ | event.EV_PERSIST).add()
+            self.accepting = True
         
         return (self.acceptChannel.receive())
+
+    def handle_accept(self, ev, sock, event_type, *arg):
+        s, a = self.sock.accept()
+            
+        print "accepting:", s, a
+        s.setsockopt(stdsocket.SOL_SOCKET, stdsocket.SO_REUSEADDR, 1)
+        s = evSocket(s)
+        sockets.append(s)
+        self.acceptChannel.send((s, a))
 
     def bind(self, address):
         self.address = address
@@ -149,10 +155,9 @@ class evSocket(object):
         while self.receiving:
             # Busy wait; sleeping was too slow; duh
             stackless.schedule()
-            continue
         
         self.sending = False  # breaks the loop in sendall
-
+        
         global sockets
         sockets.remove(self)
         self._fileno = None
@@ -162,9 +167,15 @@ class evSocket(object):
 
         #Clear out all the channels with relevant errors.
         while self.acceptChannel and self.acceptChannel.balance < 0:
+            
+            print "acceptChannel.send_ex"
+        
             self.acceptChannel.send_exception(error, 9, 'Bad file descriptor')
         
         while self.recvChannel and self.recvChannel.balance < 0:
+        
+            print "recvChannel.send("")"
+        
             self.recvChannel.send("")
     
     def connect(self, address):
@@ -172,6 +183,9 @@ class evSocket(object):
     
     def handle_connect(self, address):
         while not self.connected:
+        
+            print "connecting", address
+            
             err = self.sock.connect_ex(address)
             
             if err in (EINPROGRESS, EALREADY, EWOULDBLOCK):
@@ -193,25 +207,21 @@ class evSocket(object):
     
     def recv(self, byteCount):
         self.receiving = True
+        print "receiving"
         
         def cb():
-            self.recvChannel.send(self.sock.recv(byteCount))
+            data = self.sock.recv(byteCount)
+            print "received:", data
+            #time.sleep(1)
+            self.recvChannel.send(data)
                         
-        data = ""
-        if len(data) < byteCount:
-            try:
-                event.read(self.sock, cb)
-                data += self.recvChannel.receive()
-            except socket.error, error:
-                if error[0] in [ECONNRESET, ENOTCONN, ESHUTDOWN]:
-                    self.close()
-                else:
-                    raise
+        event.read(self.sock, cb)
+        data = self.recvChannel.receive()
                 
         self.receiving = False
+        print "finished receiving"
         return data
-        
-        
+    
     def recvfrom(self, byteCount):
         if self.socket.type == SOCK_STREAM:
             return (self.recv(byteCount), None)
@@ -221,6 +231,7 @@ class evSocket(object):
     def send(self, data):
         def cb():
             try:
+                print "sending", data
                 self.sendChannel.send(self.sock.send(data))
             except stdsocket.error, err:
                 if err[0] == EWOULDBLOCK:
@@ -246,6 +257,7 @@ class evSocket(object):
     def sendto(self, data, address):
         def cb():
             try:
+                print "sending", data
                 self.sendChannel(self.sock.sendto(data, address))
             except stdsocket.error, err:
                 if err[0] == EWOULDBLOCK:
