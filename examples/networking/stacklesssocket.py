@@ -28,7 +28,7 @@
 #   rest of the queued data
 
 import stackless
-import asyncore
+import asyncore, weakref
 import socket as stdsocket # We need the "socket" name for the function we export.
 
 # If we are to masquerade as the socket module, we need to provide the constants.
@@ -92,56 +92,32 @@ def stacklesssocket_manager(mgr):
     global _manage_sockets_func
     _manage_sockets_func = mgr
 
-#
-# Replacement for standard socket() constructor.
-#
-def socket(family=AF_INET, type=SOCK_STREAM, proto=0):
-    global managerRunning
+def socket(*args, **kwargs):
+    import sys
+    if "socket" in sys.modules and sys.modules["socket"] is not stdsocket:
+        raise RuntimeError("Use 'stacklesssocket.install' instead of replacing the 'socket' module")
 
-    currentSocket = stdsocket.socket(family, type, proto)
-    ret = stacklesssocket(currentSocket)
-    # Ensure that the sockets actually work.
-    _manage_sockets_func()
-    return ret
+_realsocket_old = stdsocket._realsocket
+_socketobject_old = stdsocket._socketobject
 
-# This is a facade to the dispatcher object.
-# It exists because asyncore's socket map keeps a bound reference to
-# the dispatcher and hence the dispatcher will never get gc'ed.
-#
-# The rest of the world sees a 'stacklesssocket' which has no cycles
-# and will be gc'ed correctly
+class _socketobject_new(_socketobject_old):
+    def __init__(self, family=AF_INET, type=SOCK_STREAM, proto=0, _sock=None):
+        # We need to do this here.
+        if _sock is None:
+            _sock = _realsocket_old(family, type, proto)
+            _sock = _fakesocket(_sock)
+            _manage_sockets_func()
+        _socketobject_old.__init__(self, family, type, proto, _sock)
+        if not isinstance(self._sock, _fakesocket):
+            raise RuntimeError("bad socket")
 
-class stacklesssocket(object):
-    def __init__(self, sock):
-        self.sock = sock
-        self.dispatcher = dispatcher(sock)
-
-    def __getattr__(self, name):
-        # Forward nearly everything to the dispatcher
-        if not name.startswith("__"):
-            # I don't like forwarding __repr__
-            return getattr(self.dispatcher, name)
-
-    def __setattr__(self, name, value):
-        if name == "wrap_accept_socket":
-            # We need to pass setting of this to the dispatcher.
-            self.dispatcher.wrap_accept_socket = value
-        else:
-            # Anything else gets set locally.
-            object.__setattr__(self, name, value)
-
-    def __del__(self):
-        # Close dispatcher if it isn't already closed
-        if self.dispatcher._fileno is not None:
-            try:
-                self.dispatcher.close()
-            finally:
-                self.dispatcher = None
-
-    # Catch this one here to make gc work correctly.
-    # (Consider if stacklesssocket gets gc'ed before the _fileobject)
-    def makefile(self, mode='r', bufsize=-1):
-        return stdsocket._fileobject(self, mode, bufsize)
+    def accept(self):
+        sock, addr = self._sock.accept()
+        sock = _fakesocket(sock)
+        sock.wasConnected = True
+        return _socketobject_new(_sock=sock), addr
+        
+    accept.__doc__ = _socketobject_old.accept.__doc__
 
 
 def check_still_connected(f):
@@ -157,29 +133,57 @@ def check_still_connected(f):
     return new_f
 
 
-class dispatcher(asyncore.dispatcher):
+def install():
+    if stdsocket._realsocket is socket:
+        raise StandardError("Still installed")
+    stdsocket._realsocket = socket
+    stdsocket.socket = stdsocket.SocketType = stdsocket._socketobject = _socketobject_new
+
+def uninstall():
+    stdsocket._realsocket = _realsocket_old
+    stdsocket.socket = stdsocket.SocketType = stdsocket._socketobject = _socketobject_old
+
+
+class _fakesocket(asyncore.dispatcher):
     connectChannel = None
     acceptChannel = None
     recvChannel = None
     wasConnected = False
 
-    def __init__(self, sock):
-        # This is worth doing.  I was passing in an invalid socket which was
-        # an instance of dispatcher and it was causing tasklet death.
-        if not isinstance(sock, stdsocket.socket):
-            raise StandardError("Invalid socket passed to dispatcher")
-        asyncore.dispatcher.__init__(self, sock)
+    def __init__(self, realSocket):
+        # This is worth doing.  I was passing in an invalid socket which
+        # was an instance of _fakesocket and it was causing tasklet death.
+        if not isinstance(realSocket, _realsocket_old):
+            raise StandardError("An invalid socket passed to fakesocket %s" % realSocket.__class__)
 
-        # if self.socket.type == SOCK_DGRAM:
-        #    self.dgramRecvChannels = {}
-        #    self.dgramReadBuffers = {}
-        #else:
+        # This will register the real socket in the internal socket map.
+        asyncore.dispatcher.__init__(self, realSocket)
+        self.socket = realSocket
+
         self.recvChannel = stackless.channel()
         self.readString = ''
         self.readIdx = 0
 
         self.sendBuffer = ''
         self.sendToBuffers = []
+
+    def __del__(self):
+        # There are no more users (sockets or files) of this fake socket, we
+        # are safe to close it fully.  If we don't, asyncore will choke on
+        # the weakref failures.
+        self.close()
+
+    # The asyncore version of this function depends on socket being set
+    # which is not the case when this fake socket has been closed.
+    def __getattr__(self, attr):
+        if not hasattr(self, "socket"):
+            raise AttributeError("socket attribute unset on '"+ attr +"' lookup")
+        return getattr(self.socket, attr)
+
+    def add_channel(self, map=None):
+        if map is None:
+            map = self._map
+        map[self._fileno] = weakref.proxy(self)
 
     def writable(self):
         if self.socket.type != SOCK_DGRAM and not self.connected:
@@ -251,8 +255,13 @@ class dispatcher(asyncore.dispatcher):
             self.readIdx = 0
 
         if byteCount == 1:
-            ret = self.readString[self.readIdx]
-            self.readIdx += 1
+            try: # TODO: Work out how the index can be wrong here.
+                ret = self.readString[self.readIdx]
+                self.readIdx += 1
+            except:
+                print len(self.readString)
+                print self.readIdx
+                raise
         elif self.readIdx == 0 and byteCount >= len(self.readString):
             ret = self.readString
             self.readString = ""
@@ -276,6 +285,7 @@ class dispatcher(asyncore.dispatcher):
 
     def close(self):
         asyncore.dispatcher.close(self)
+
         self.connected = False
         self.accepting = False
         self.sendBuffer = None  # breaks the loop in sendall
@@ -301,9 +311,9 @@ class dispatcher(asyncore.dispatcher):
             currentSocket, clientAddress = asyncore.dispatcher.accept(self)
             currentSocket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
             # Give them the asyncore based socket, not the standard one.
-            currentSocket = self.wrap_accept_socket(currentSocket)
+            #currentSocket = self.wrap_accept_socket(currentSocket)
             # Need to ensure we flag the dispatcher as connected.
-            currentSocket.dispatcher.wasConnected = True
+            # currentSocket._sock.wasConnected = True
             stackless.tasklet(self.acceptChannel.send)((currentSocket, clientAddress))
 
     # Inform the blocked connect call that the connection has been made.
@@ -358,11 +368,6 @@ class dispatcher(asyncore.dispatcher):
                 del self.sendToBuffers[0]
                 stackless.tasklet(channel.send)(totalSentBytes)
 
-    # In order for incoming connections to be stackless compatible,
-    # they need to be wrapped by an asyncore based dispatcher subclass.
-    def wrap_accept_socket(self, currentSocket):
-        return stacklesssocket(currentSocket)
-
 
 if __name__ == '__main__':
     import sys
@@ -373,14 +378,11 @@ if __name__ == '__main__':
     data = struct.pack("i", info)
     dataLength = len(data)
 
-    print "creating listen socket"
-    def TestTCPServer(address, socketClass=None):
+    def TestTCPServer(address):
         global info, data, dataLength
 
-        if not socketClass:
-            socketClass = socket
-
-        listenSocket = socketClass(AF_INET, SOCK_STREAM)
+        print "server listen socket creation"
+        listenSocket = stdsocket.socket(AF_INET, SOCK_STREAM)
         listenSocket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
         listenSocket.bind(address)
         listenSocket.listen(5)
@@ -391,12 +393,14 @@ if __name__ == '__main__':
         while i < NUM_TESTS + 1:
             # No need to schedule this tasklet as the accept should yield most
             # of the time on the underlying channel.
-            print "waiting for connection test", i
+            print "server connection wait", i
             currentSocket, clientAddress = listenSocket.accept()
-            print "received connection", i, "from", clientAddress
+            print "server", i, "listen socket", currentSocket.fileno(), "from", clientAddress
 
             if i == 1:
+                print "server closing (a)", i, "fd", currentSocket.fileno(), "id", id(currentSocket)
                 currentSocket.close()
+                print "server closed (a)", i
             elif i == 2:
                 print "server test", i, "send"
                 currentSocket.send(data)
@@ -409,6 +413,7 @@ if __name__ == '__main__':
                     print "server recv(2)", i, "FAIL"
                     break
             else:
+                print "server closing (b)", i, "fd", currentSocket.fileno(), "id", id(currentSocket)
                 currentSocket.close()
 
             print "server test", i, "OK"
@@ -421,25 +426,22 @@ if __name__ == '__main__':
 
         print "Done server"
 
-    def TestTCPClient(address, socketClass=None):
+    def TestTCPClient(address):
         global info, data, dataLength
 
-        if not socketClass:
-            socketClass = socket
-
         # Attempt 1:
-        clientSocket = socketClass()
+        clientSocket = stdsocket.socket()
         clientSocket.connect(address)
-        print "client connection", 1, "waiting to recv"
+        print "client connection (1) fd", clientSocket.fileno(), "id", id(clientSocket._sock), "waiting to recv"
         if clientSocket.recv(5) != "":
             print "client test", 1, "FAIL"
         else:
             print "client test", 1, "OK"
 
         # Attempt 2:
-        clientSocket = socket()
+        clientSocket = stdsocket.socket()
         clientSocket.connect(address)
-        print "client connection", 2, "waiting to recv"
+        print "client connection (2) fd", clientSocket.fileno(), "id", id(clientSocket._sock), "waiting to recv"
         s = clientSocket.recv(dataLength)
         if s == "":
             print "client test", 2, "FAIL (disconnect)"
@@ -450,30 +452,35 @@ if __name__ == '__main__':
             else:
                 print "client test", 2, "FAIL (wrong data)"
 
+        print "client exit"
+
     def TestMonkeyPatchUrllib(uri):
         # replace the system socket with this module
-        oldSocket = sys.modules["socket"]
-        sys.modules["socket"] = __import__(__name__)
+        #oldSocket = sys.modules["socket"]
+        #sys.modules["socket"] = __import__(__name__)
+        install()
         try:
             import urllib  # must occur after monkey-patching!
             f = urllib.urlopen(uri)
-            if not isinstance(f.fp._sock, stacklesssocket):
-                raise AssertionError("failed to apply monkeypatch")
+            if not isinstance(f.fp._sock, _fakesocket):
+                raise AssertionError("failed to apply monkeypatch, got %s" % f.fp._sock.__class__)
             s = f.read()
             if len(s) != 0:
                 print "Fetched", len(s), "bytes via replaced urllib"
             else:
                 raise AssertionError("no text received?")
         finally:
-            sys.modules["socket"] = oldSocket
+            #sys.modules["socket"] = oldSocket
+            uninstall()
 
     def TestMonkeyPatchUDP(address):
         # replace the system socket with this module
-        oldSocket = sys.modules["socket"]
-        sys.modules["socket"] = __import__(__name__)
+        #oldSocket = sys.modules["socket"]
+        #sys.modules["socket"] = __import__(__name__)
+        install()
         try:
             def UDPServer(address):
-                listenSocket = socket(AF_INET, SOCK_DGRAM)
+                listenSocket = stdsocket.socket(AF_INET, SOCK_DGRAM)
                 listenSocket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
                 listenSocket.bind(address)
 
@@ -489,7 +496,7 @@ if __name__ == '__main__':
                     raise StandardError("Unexpected UDP packet size")
 
             def UDPClient(address):
-                clientSocket = socket(AF_INET, SOCK_DGRAM)
+                clientSocket = stdsocket.socket(AF_INET, SOCK_DGRAM)
                 # clientSocket.connect(address)
                 print "sending 512 byte packet"
                 sentBytes = clientSocket.sendto("-"+ ("*" * 510) +"-", address)
@@ -499,12 +506,13 @@ if __name__ == '__main__':
             stackless.tasklet(UDPClient)(address)
             stackless.run()
         finally:
-            sys.modules["socket"] = oldSocket
+            #sys.modules["socket"] = oldSocket
+            uninstall()
 
     if len(sys.argv) == 2:
         if sys.argv[1] == "client":
             print "client started"
-            TestTCPClient(testAddress, stdsocket.socket)
+            TestTCPClient(testAddress)
             print "client exited"
         elif sys.argv[1] == "slpclient":
             print "client started"
@@ -513,7 +521,7 @@ if __name__ == '__main__':
             print "client exited"
         elif sys.argv[1] == "server":
             print "server started"
-            TestTCPServer(testAddress, stdsocket.socket)
+            TestTCPServer(testAddress)
             print "server exited"
         elif sys.argv[1] == "slpserver":
             print "server started"
@@ -525,13 +533,20 @@ if __name__ == '__main__':
 
         sys.exit(1)
     else:
-        stackless.tasklet(TestTCPServer)(testAddress)
-        stackless.tasklet(TestTCPClient)(testAddress)
-        stackless.run()
+        print "* Running client/server test"
+        install()
+        try:
+            stackless.tasklet(TestTCPServer)(testAddress)
+            stackless.tasklet(TestTCPClient)(testAddress)
+            stackless.run()
+        finally:
+            uninstall()
 
+        print "* Running urllib test"
         stackless.tasklet(TestMonkeyPatchUrllib)("http://python.org/")
         stackless.run()
 
+        print "* Running udp test"
         TestMonkeyPatchUDP(testAddress)
 
         print "result: SUCCESS"
