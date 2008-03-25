@@ -24,7 +24,8 @@ import sys, time
 import stackless
 
 import stacklesssocket
-sys.modules["socket"] = stacklesssocket
+#sys.modules["socket"] = stacklesssocket
+stacklesssocket.install()
 import socket
 
 class Server(object):

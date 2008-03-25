@@ -13,7 +13,11 @@
 #
 
 import stackless
-import stacklesssocket as socket
+#import stacklesssocket as socket
+import stacklesssocket
+stacklesssocket.install()
+import socket
+
 import types, struct, cPickle
 
 class EndPoint:

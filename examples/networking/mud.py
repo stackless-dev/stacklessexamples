@@ -15,7 +15,8 @@ import stackless
 # which are Stackless compatible.  This example code will avoid any use of
 # the Stackless sockets except through normal socket usage.
 import stacklesssocket
-sys.modules["socket"] = stacklesssocket
+#sys.modules["socket"] = stacklesssocket
+stacklesssocket.install()
 import socket
 
 

@@ -17,10 +17,11 @@
 
 # Monkeypatch in the stacklesssocket module.
 import sys, time
-import stacklesssocket
-sys.modules["socket"] = stacklesssocket
-
 import stackless
+import stacklesssocket
+#sys.modules["socket"] = stacklesssocket
+stacklesssocket.install()
+
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
 
 body = """
