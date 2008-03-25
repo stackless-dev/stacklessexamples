@@ -241,6 +241,9 @@ class _fakesocket(asyncore.dispatcher):
         # call should be split into strings of length less than or equal
         # to 'byteCount', and returned by one or more recv() calls.
 
+        remainingBytes = self.readIdx != len(self.readString)
+        # TODO: Verify this connectivity behaviour.
+
         if not self.connected:
             # Sockets which have never been connected do this.
             if not self.wasConnected:
@@ -250,18 +253,14 @@ class _fakesocket(asyncore.dispatcher):
             # up the remaining input.  Observed this with urllib.urlopen
             # where it closes the socket and then allows the caller to
             # use a file to access the body of the web page.
-        elif self.readIdx == len(self.readString):            
+        elif not remainingBytes:            
             self.readString = self.recvChannel.receive()
             self.readIdx = 0
+            remainingBytes = len(self.readString)
 
-        if byteCount == 1:
-            try: # TODO: Work out how the index can be wrong here.
-                ret = self.readString[self.readIdx]
-                self.readIdx += 1
-            except:
-                print len(self.readString)
-                print self.readIdx
-                raise
+        if byteCount == 1 and remainingBytes:
+            ret = self.readString[self.readIdx]
+            self.readIdx += 1
         elif self.readIdx == 0 and byteCount >= len(self.readString):
             ret = self.readString
             self.readString = ""
