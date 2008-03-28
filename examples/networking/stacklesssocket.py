@@ -207,13 +207,13 @@ class _fakesocket(asyncore.dispatcher):
             self.connectChannel.receive()
 
     @check_still_connected
-    def send(self, data):
+    def send(self, data, flags=0):
         self.sendBuffer += data
         stackless.schedule()
         return len(data)
 
     @check_still_connected
-    def sendall(self, data):
+    def sendall(self, data, flags=0):
         # WARNING: this will busy wait until all data is sent
         # It should be possible to do away with the busy wait with
         # the use of a channel.
@@ -222,7 +222,16 @@ class _fakesocket(asyncore.dispatcher):
             stackless.schedule()
         return len(data)
 
-    def sendto(self, sendData, sendAddress):
+    def sendto(self, sendData, sendArg1=None, sendArg2=None):
+        # sendto(data, address)
+        # sendto(data [, flags], address)
+        if sendArg2 is not None:
+            flags = sendArg1
+            sendAddress = sendArg2
+        else:
+            flags = 0
+            sendAddress = sendArg1
+            
         waitChannel = None
         for idx, (data, address, channel, sentBytes) in enumerate(self.sendToBuffers):
             if address == sendAddress:
@@ -235,7 +244,7 @@ class _fakesocket(asyncore.dispatcher):
         return waitChannel.receive()
 
     # Read at most byteCount bytes.
-    def recv(self, byteCount):        
+    def recv(self, byteCount, flags=0):        
         # recv() must not concatenate two or more data fragments sent with
         # send() on the remote side. Single fragment sent with single send()
         # call should be split into strings of length less than or equal
@@ -273,7 +282,7 @@ class _fakesocket(asyncore.dispatcher):
         # ret will be '' when EOF.
         return ret
 
-    def recvfrom(self, byteCount):
+    def recvfrom(self, byteCount, flags=0):
         if self.socket.type == SOCK_STREAM:
             return self.recv(byteCount), None
 
@@ -307,13 +316,11 @@ class _fakesocket(asyncore.dispatcher):
 
     def handle_accept(self):
         if self.acceptChannel and self.acceptChannel.balance < 0:
-            currentSocket, clientAddress = asyncore.dispatcher.accept(self)
-            currentSocket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
-            # Give them the asyncore based socket, not the standard one.
-            #currentSocket = self.wrap_accept_socket(currentSocket)
-            # Need to ensure we flag the dispatcher as connected.
-            # currentSocket._sock.wasConnected = True
-            stackless.tasklet(self.acceptChannel.send)((currentSocket, clientAddress))
+            t = asyncore.dispatcher.accept(self)
+            if t is None:
+                return
+            t[0].setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
+            stackless.tasklet(self.acceptChannel.send)(t)
 
     # Inform the blocked connect call that the connection has been made.
     def handle_connect(self):
@@ -334,8 +341,7 @@ class _fakesocket(asyncore.dispatcher):
     def handle_read(self):
         try:
             if self.socket.type == SOCK_DGRAM:
-                ret, address = self.socket.recvfrom(20000)
-                stackless.tasklet(self.recvChannel.send)((ret, address))
+                ret = self.socket.recvfrom(20000)
             else:
                 ret = asyncore.dispatcher.recv(self, 20000)
                 # Not sure this is correct, but it seems to give the
@@ -343,14 +349,12 @@ class _fakesocket(asyncore.dispatcher):
                 # asyncore.
                 if not ret:
                     self.close()
-                stackless.tasklet(self.recvChannel.send)(ret)
+            stackless.tasklet(self.recvChannel.send)(ret)
         except stdsocket.error, err:
-            # XXX Is this correct?
             # If there's a read error assume the connection is
             # broken and drop any pending output
             if self.sendBuffer:
                 self.sendBuffer = ""
-            # Why can't I pass the 'err' by itself?
             self.recvChannel.send_exception(stdsocket.error, err)
 
     def handle_write(self):
