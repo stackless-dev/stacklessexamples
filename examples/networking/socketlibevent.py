@@ -71,7 +71,7 @@ def runEventLoop():
     stackless.tasklet(eventLoop)()        
 
 
-#________Replacement Socket Module Methods______________________________________
+#________Replacement Socket Module Functions____________________________________
 
 def socket(family=AF_INET, type=SOCK_STREAM, proto=0):
     real = stdsocket.socket(family, type, proto)
