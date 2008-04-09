@@ -13,13 +13,25 @@
 
 
 import stackless, sys
+import socket as stdsocket
 
 try:
     import event
 except:
     sys.exit("This module requires libevent and pyevent.")
 
-import socket as stdsocket
+try:
+    import ssl as ssl_
+    ssl_enabled = True
+except:
+    ssl_enabled = False
+
+# Smoke 'em if you got 'em
+try:
+    import psyco
+    psyco.full()
+except:
+    pass
 
 
 #____Socket Module Constants (from stacklesscket.py (Richard Tew))______________
@@ -80,7 +92,11 @@ def socket(family=AF_INET, type=SOCK_STREAM, proto=0):
     return proxy
     
 def ssl(sock, keyfile=None, certfile=None):
-    return evsocketssl(sock, keyfile, certfile)
+    if ssl_enabled:
+        return evsocketssl(sock, keyfile, certfile)
+    else:
+        raise RuntimeError(\
+            "SSL requires the 'ssl' module: 'http://pypi.python.org/pypi/ssl/'")
     
 
 #________Socket Proxy Class_____________________________________________________
@@ -168,12 +184,23 @@ class evsocket():
 
 #________SSL Proxy Class________________________________________________________
 
-class evsocketssl():
+class evsocketssl(evsocket):
     def __init__(self, sock, keyfile=None, certfile=None):
-        raise NotImplementedError("Coming soon!")
+        if certfile:
+            server_side = True
+        else:
+            server_side = False
+        
+        # XXX This currently performs a BLOCKING handshake operation
+        # TODO Implement a non-blocking handshake
+        self.sock = ssl_.wrap_socket(sock, keyfile, certfile, server_side)
 
-
-
+    def handle_accept(self, ev, sock, event_type, *arg):
+        s, a = self.sock.accept()
+        s.setsockopt(stdsocket.SOL_SOCKET, stdsocket.SO_REUSEADDR, 1)
+        s.setsockopt(stdsocket.IPPROTO_TCP, stdsocket.TCP_NODELAY, 1)
+        s = evsocketssl(s)
+        stackless.tasklet(self.accept_channel.send((s,a)))
 
 
 
