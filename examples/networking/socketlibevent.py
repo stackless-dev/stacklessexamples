@@ -20,6 +20,8 @@ try:
 except:
     sys.exit("This module requires libevent and pyevent.")
 
+# For SSL support, this module uses the 'ssl' module:
+#                                             'http://pypi.python.org/pypi/ssl/
 try:
     import ssl as ssl_
     ssl_enabled = True
