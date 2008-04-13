@@ -106,6 +106,7 @@ def ssl(sock, keyfile=None, certfile=None):
 class evsocket():
     # XXX Not all socketobject methods are implemented!
     
+    accepting = False
     connected = False
     remote_addr = None
     
@@ -124,6 +125,8 @@ class evsocket():
             self.accept_channel = stackless.channel()
             event.event(self.handle_accept, handle=self.sock._sock,
                         evtype=event.EV_READ | event.EV_PERSIST).add()
+            self.accepting = True
+            
         return self.accept_channel.receive()
 
     def handle_accept(self, ev, sock, event_type, *arg):
