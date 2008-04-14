@@ -119,7 +119,7 @@ class evsocket():
     def __getattr__(self, attr):
         return getattr(self.sock, attr)
 
-    def listen(self, backlog=5):
+    def listen(self, backlog=1):
         self.accepting = True
         self.sock.listen(backlog)
 
