@@ -119,14 +119,15 @@ class evsocket():
     def __getattr__(self, attr):
         return getattr(self.sock, attr)
 
+    def listen(self, backlog=5):
+        self.accepting = True
+        self.sock.listen(backlog)
 
     def accept(self):
         if not self.accept_channel:
             self.accept_channel = stackless.channel()
             event.event(self.handle_accept, handle=self.sock,
                         evtype=event.EV_READ | event.EV_PERSIST).add()
-            self.accepting = True
-            
         return self.accept_channel.receive()
 
     def handle_accept(self, ev, sock, event_type, *arg):
