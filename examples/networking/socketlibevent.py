@@ -61,7 +61,6 @@ else:
 # urllib2 apparently uses this directly.  We need to cater for that.
 _fileobject = stdsocket._fileobject
 
-
 #________Event Loop Management__________________________________________________
 
 loop_running = False
@@ -123,7 +122,7 @@ class evsocket():
     def accept(self):
         if not self.accept_channel:
             self.accept_channel = stackless.channel()
-            event.event(self.handle_accept, handle=self.sock._sock,
+            event.event(self.handle_accept, handle=self.sock,
                         evtype=event.EV_READ | event.EV_PERSIST).add()
             self.accepting = True
             
@@ -150,7 +149,7 @@ class evsocket():
 
 
     def send(self, data, *args):
-        event.write(self.sock._sock, self.handle_send, data)
+        event.write(self.sock, self.handle_send, data)
         return self.write_channel.receive()
         
     def handle_send(self, data):
@@ -168,7 +167,8 @@ class evsocket():
 
 
     def recv(self, bytes, *args):
-        event.read(self.sock._sock, self.handle_recv, bytes)
+        event.read(self.sock, self.handle_recv, bytes)
+         
         return self.read_channel.receive()
     
     def handle_recv(self, bytes):
@@ -176,7 +176,7 @@ class evsocket():
 
     
     def recvfrom(self, bytes, *args):
-        event.read(self.sock._sock, self.handle_recv, bytes)
+        event.read(self.sock, self.handle_recv, bytes)
         return self.read_channel.receive()
 
     def handle_recvfrom(self, bytes):
@@ -184,7 +184,19 @@ class evsocket():
 
 
     def makefile(self, mode='r', bufsize=-1):
-        return stdsocket._fileobject(self, mode, bufsize)
+        self.fileobject = stdsocket._fileobject(self, mode, bufsize)
+        return self.fileobject
+
+    def close(self):
+        # Don't close while the fileobject is still using the fakesocket
+        # XXX Temporary fix
+        def _close():
+            while self.fileobject and self.fileobject._sock == self:
+                stackless.schedule()
+            self._sock.close()
+            # should I do this?
+            # del self
+        stackless.tasklet(_close)()
 
 
 #________SSL Proxy Class________________________________________________________
