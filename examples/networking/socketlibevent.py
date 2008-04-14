@@ -108,6 +108,7 @@ class evsocket():
     accepting = False
     connected = False
     remote_addr = None
+    fileobject = None
     
     def __init__(self, sock):
         self.sock = sock
@@ -191,11 +192,12 @@ class evsocket():
         # Don't close while the fileobject is still using the fakesocket
         # XXX Temporary fix
         def _close():
-            while self.fileobject and self.fileobject._sock == self:
-                stackless.schedule()
-            self._sock.close()
-            # should I do this?
-            # del self
+            if self.fileobject:
+                while self.fileobject._sock == self:
+                    stackless.schedule()
+                self._sock.close()
+                # should I do this?
+                # del self
         stackless.tasklet(_close)()
 
 
