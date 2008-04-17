@@ -23,37 +23,33 @@ from ProdConPyQt_ui import Ui_MainWindow
 
 # Nice way to put the tasklet to sleep - from stackless.com wiki/Idioms
 ##########################################################
-class Sleep(object):
-    def __init__(self):
-        self.sleepingTasklets = []
-        stackless.tasklet(self.ManageSleepingTasklets)()
+sleepingTasklets = []
+def Sleep(secondsToWait):
+    channel = stackless.channel()
+    endTime = time.time() + secondsToWait
+    sleepingTasklets.append((endTime, channel))
+    sleepingTasklets.sort()
+    # Block until we get sent an awakening notification.
+    channel.receive()
 
-    def Sleep(self, secondsToWait):
-        channel = stackless.channel()
-        endTime = time.time() + secondsToWait
-        self.sleepingTasklets.append((endTime, channel))
-        self.sleepingTasklets.sort()
-        # Block until we get sent an awakening notification.
-        channel.receive()
-
-    def ManageSleepingTasklets(self):
-        while True:
-            if len(self.sleepingTasklets):
-                endTime = self.sleepingTasklets[0][0]
-                if endTime <= time.time():
-                    channel = self.sleepingTasklets[0][1]
-                    del self.sleepingTasklets[0]
-                    # We have to send something, but it doesn't matter what as it is not used.
-                    channel.send(None)
-                elif stackless.getruncount() == 1:
-                    # We are the only tasklet running, the rest are blocked on channels sleeping.
-                    # We can call time.sleep until the first awakens to avoid a busy wait.
-                    delay = endTime - time.time()
-                    #print "wait delay", delay
-                    time.sleep(max(delay,0))
-            stackless.schedule()
-
-Sleep = Sleep().Sleep
+def ManageSleepingTasklets():
+    while True:
+        if len(sleepingTasklets):
+            endTime = sleepingTasklets[0][0]
+            if endTime <= time.time():
+                channel = sleepingTasklets[0][1]
+                del sleepingTasklets[0]
+                # We have to send something, but it doesn't matter what as it is not used.
+                channel.send(None)
+            elif stackless.getruncount() == 1:
+                # We are the only tasklet running, the rest are blocked on channels sleeping.
+                # We can call time.sleep until the first awakens to avoid a busy wait.
+                delay = endTime - time.time()
+                #print "wait delay", delay
+                time.sleep(max(delay,0))
+        stackless.schedule()
+            
+sleepmgr = stackless.tasklet(ManageSleepingTasklets)()
 
 ##########################################################
 
@@ -165,7 +161,7 @@ class mainWindow(QtGui.QMainWindow):
                 p.kill = True
             for c in self.q.consumers:
                 c.kill = True
-            self.sleepMan.kill()
+            sleepmgr.kill()
             self.showReport()
         except: pass
 
