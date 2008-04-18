@@ -28,7 +28,7 @@ try:
 except:
     ssl_enabled = False
 
-# Smoke 'em if you got 'em
+# Don't ask me if this helps with this module...
 try:
     import psyco
     psyco.full()
@@ -105,6 +105,12 @@ def ssl(sock, keyfile=None, certfile=None):
 class evsocket():
     # XXX Not all socketobject methods are implemented!
     
+    # XXX Currently, the sockets are using the default, blocking mode
+    # I believe that normally this will not be a problem, but in the case of
+    # socket errors, who knows how long they will block the whole system.
+    
+    # TODO: Switch to non-blocking sockets
+    
     accepting = False
     connected = False
     remote_addr = None
@@ -149,14 +155,12 @@ class evsocket():
             # One last try, just to raise an error
             return self.sock.connect(address)
 
-
     def send(self, data, *args):
         event.write(self.sock, self.handle_send, data)
         return self.write_channel.receive()
         
     def handle_send(self, data):
         stackless.tasklet(self.write_channel.send(self.sock.send(data)))
-
 
     def sendall(self, data, *args):
         while data:
@@ -167,7 +171,6 @@ class evsocket():
                 raise
         return None
 
-
     def recv(self, bytes, *args):
         event.read(self.sock, self.handle_recv, bytes)
          
@@ -175,7 +178,6 @@ class evsocket():
     
     def handle_recv(self, bytes):
         stackless.tasklet(self.read_channel.send(self.sock.recv(bytes)))
-
     
     def recvfrom(self, bytes, *args):
         event.read(self.sock, self.handle_recv, bytes)
@@ -183,7 +185,6 @@ class evsocket():
 
     def handle_recvfrom(self, bytes):
         stackless.tasklet(self.read_channel.send(self.sock.recvfrom(bytes)))
-
 
     def makefile(self, mode='r', bufsize=-1):
         self.fileobject = stdsocket._fileobject(self, mode, bufsize)
@@ -193,14 +194,11 @@ class evsocket():
         # Don't close while the fileobject is still using the fakesocket
         # XXX Temporary fix
         def _close():
-            if self.fileobject:
-                while self.fileobject._sock == self:
-                    stackless.schedule()
-                self._sock.close()
-                # should I do this?
-                # del self
-        stackless.tasklet(_close)()
-
+            while self.fileobject._sock == self:
+                stackless.schedule()
+            self._sock.close()
+        if self.fileobject:
+            stackless.tasklet(_close)()
 
 #________SSL Proxy Class________________________________________________________
 
