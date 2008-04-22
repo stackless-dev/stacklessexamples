@@ -52,7 +52,6 @@ pages = {
 class RequestHandler(BaseHTTPRequestHandler):
     # Respect keep alive requests.
     protocol_version = "HTTP/1.1"
-    useChunked = True
 
     def do_GET(self):
         scheme, netloc, path, parameters, query, fragment = urlparse.urlparse(self.path, "http")
@@ -64,10 +63,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         contentLength = int(self.headers.get("content-length", -1))
 
         content = ""
-        kwargs = None
-        if contentType == "multipart/form-data":
-            content, multiparts = self.ExtractMultiparts(contentTypeParameters, contentLength)
-        elif contentType == "application/x-www-form-urlencoded":
+        if contentType == "application/x-www-form-urlencoded":
             query = self.rfile.read(contentLength)
 
         self.handle_command(path, query, content)
@@ -147,6 +143,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         # each blocked subscriber channel was sent to and immediately received.
         # Instead because each subscriber channel has had its preference changed
         # each send will schedule the tasklet waiting on the other side of the
+        # channel.
         while waitChannel.balance < 0:
             waitChannel.send(None)
             
