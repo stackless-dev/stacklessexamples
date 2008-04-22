@@ -20,8 +20,6 @@
 # Obtain this from: http://code.google.com/p/stacklessexamples/
 import stacklesssocket
 stacklesssocket.install()
-# Obtain this from: http://pypi.python.org/pypi/simplejson/
-import simplejson
 # Obtain this from: http://pi-js.googlecode.com/files/pi.py
 import pi                   # 
 # Obtain also: http://pi-js.googlecode.com/files/pi-comet-v0.1-stable.js
