@@ -11,24 +11,22 @@
 
 """
 
-
-import stackless, sys
+import stackless, sys, time, traceback
+from weakref import WeakValueDictionary
 import socket as stdsocket
+from socket import _fileobject
 
-try:
-    import event
-except:
-    sys.exit("This module requires libevent and pyevent.")
+try: import event
+except: sys.exit("This module requires libevent and pyevent.")
 
 # For SSL support, this module uses the 'ssl' module:
-#                                             'http://pypi.python.org/pypi/ssl/
+#                                              'http://pypi.python.org/pypi/ssl/
 try:
     import ssl as ssl_
     ssl_enabled = True
 except:
     ssl_enabled = False
 
-# Don't ask me if this helps with this module...
 try:
     import psyco
     psyco.full()
@@ -36,61 +34,56 @@ except:
     pass
 
 
-#____Socket Module Constants (from stacklesscket.py (Richard Tew))______________
-
 if "__all__" in stdsocket.__dict__:
-    __all__ = stdsocket.__dict__
-    for k, v in stdsocket.__dict__.iteritems():
-        if k in __all__:
-            globals()[k] = v
-        elif k == "EBADF":
-            globals()[k] = v
+    __all__ = stdsocket.__dict__["__all__"]
+    globals().update((key, value) for key, value in\
+             stdsocket.__dict__.iteritems() if key in __all__ or key == "EBADF")
 else:
-    for k, v in stdsocket.__dict__.iteritems():
-        if k.upper() == k:
-            globals()[k] = v
-    error = stdsocket.error
-    timeout = stdsocket.timeout
-    # WARNING: this function blocks and is not thread safe.
-    # The only solution is to spawn a thread to handle all
-    # getaddrinfo requests.  Implementing a stackless DNS
-    # lookup service is only second best as getaddrinfo may
-    # use other methods.
-    getaddrinfo = stdsocket.getaddrinfo
+    other_keys = ("error", "timeout", "getaddrinfo")
+    globals().update((key, value) for key, value in\
+        stdsocket.__dict__.iteritems() if key.upper() == key or key in\
+                                                                     other_keys)
 
-# urllib2 apparently uses this directly.  We need to cater for that.
-_fileobject = stdsocket._fileobject
 
-#________Event Loop Management__________________________________________________
-
+# Event Loop Management
 loop_running = False
+sockets = WeakValueDictionary()
+event_errors = 0
 
-def killEventLoop():
-    global loop_running
-    loop_running = False
-    
+def die():
+    global sockets
+    sockets = {}
+
 def eventLoop():
-    while loop_running:
-        event.loop(True)
+    global loop_running
+    global event_errors
+    downtime = 0  # Current Sleep Value
+    max_downtime = 0.5  # Max Sleep Value
+    
+    while sockets.values():
+        # If there are other tasklets scheduled, then use the nonblocking loop,
+        # else, use the blocking loop
+        if stackless.getruncount() > 2: # main tasklet + this one
+            status = event.loop(True)
+        else:
+            status = event.loop(False)
+        if status == -1: event_errors += 1
         stackless.schedule()
+            
+    loop_running = False
 
 def runEventLoop():
     global loop_running
-    if loop_running:
-        return
-    loop_running = True
-    event.init()
-    event.signal(2, killEventLoop)
-    stackless.tasklet(eventLoop)()        
+    if not loop_running:
+        event.init()
+        event.signal(2, die)
+        stackless.tasklet(eventLoop)()
+        loop_running = True
 
 
-#________Replacement Socket Module Functions____________________________________
-
+# Replacement Socket Module Functions
 def socket(family=AF_INET, type=SOCK_STREAM, proto=0):
-    real = stdsocket.socket(family, type, proto)
-    proxy = evsocket(real)
-    runEventLoop()
-    return proxy
+    return evsocket(stdsocket.socket(family, type, proto))
     
 def ssl(sock, keyfile=None, certfile=None):
     if ssl_enabled:
@@ -100,32 +93,43 @@ def ssl(sock, keyfile=None, certfile=None):
             "SSL requires the 'ssl' module: 'http://pypi.python.org/pypi/ssl/'")
     
 
-#________Socket Proxy Class_____________________________________________________
-
+# Socket Proxy Class
 class evsocket():
     # XXX Not all socketobject methods are implemented!
-    
-    # XXX Currently, the sockets are using the default, blocking mode
-    # I believe that normally this will not be a problem, but in the case of
-    # socket errors, who knows how long they will block the whole system.
-    
-    # TODO: Switch to non-blocking sockets
-    
-    accepting = False
-    connected = False
-    remote_addr = None
-    fileobject = None
+    # XXX Currently, the sockets are using the default, blocking mode.
     
     def __init__(self, sock):
         self.sock = sock
+        #self.bufferevent = event.bufferevent(self.sock,
+        #                                     self.handleRead,
+        #                                     self.handleWrite,
+        #                                     self.handleError)
+        #self.bufferevent.enable(event.EV_READ | event.EV_WRITE)
+        self.accepting = False
+        self.connected = False
+        self.remote_addr = None
+        self.fileobject = None
         self.read_channel = stackless.channel()
         self.write_channel = stackless.channel()
         self.accept_channel = None
+        global sockets
+        sockets[id(self)] = self
+        runEventLoop()
+    
+    def handleRead(self):
+        print "handleRead()"
+    
+    def handleWrite(self):
+        print "handleWrite()"
+        #self.bufferevent.disable(event.EV_WRITE)
+    
+    def handleError(self):
+        print "handleError()"
     
     def __getattr__(self, attr):
         return getattr(self.sock, attr)
 
-    def listen(self, backlog=1):
+    def listen(self, backlog=128):
         self.accepting = True
         self.sock.listen(backlog)
 
@@ -158,6 +162,13 @@ class evsocket():
     def send(self, data, *args):
         event.write(self.sock, self.handle_send, data)
         return self.write_channel.receive()
+        #print "send()"
+        #status = self.bufferevent.write(data)
+        #if status == 0:
+        #    return len(data)
+        #else:
+        #    print "bufferevent write error"
+        #    return status
         
     def handle_send(self, data):
         stackless.tasklet(self.write_channel.send(self.sock.send(data)))
@@ -197,11 +208,12 @@ class evsocket():
             while self.fileobject._sock == self:
                 stackless.schedule()
             self._sock.close()
+            del sockets[id(self)]
         if self.fileobject:
             stackless.tasklet(_close)()
 
-#________SSL Proxy Class________________________________________________________
 
+# SSL Proxy Class
 class evsocketssl(evsocket):
     def __init__(self, sock, keyfile=None, certfile=None):
         if certfile:
@@ -221,5 +233,17 @@ class evsocketssl(evsocket):
         stackless.tasklet(self.accept_channel.send((s,a)))
 
 
-
-
+# Very minimal test
+if __name__ == "__main__":
+    sys.modules["socket"] = __import__(__name__)
+    
+    import urllib2
+    
+    def test(i):
+        print "url read", i
+        print urllib2.urlopen("http://www.google.com").read(12)
+    
+    for i in range(5):
+        stackless.tasklet(test)(i)
+    
+    stackless.run()
