@@ -48,7 +48,6 @@ else:
 # Event Loop Management
 loop_running = False
 sockets = WeakValueDictionary()
-event_errors = 0
 
 def die():
     global sockets
@@ -57,19 +56,15 @@ def die():
 def eventLoop():
     global loop_running
     global event_errors
-    downtime = 0  # Current Sleep Value
-    max_downtime = 0.5  # Max Sleep Value
     
     while sockets.values():
         # If there are other tasklets scheduled, then use the nonblocking loop,
         # else, use the blocking loop
         if stackless.getruncount() > 2: # main tasklet + this one
-            status = event.loop(True)
+            event.loop(True)
         else:
-            status = event.loop(False)
-        if status == -1: event_errors += 1
+            event.loop(False)
         stackless.schedule()
-            
     loop_running = False
 
 def runEventLoop():
@@ -100,11 +95,6 @@ class evsocket():
     
     def __init__(self, sock):
         self.sock = sock
-        #self.bufferevent = event.bufferevent(self.sock,
-        #                                     self.handleRead,
-        #                                     self.handleWrite,
-        #                                     self.handleError)
-        #self.bufferevent.enable(event.EV_READ | event.EV_WRITE)
         self.accepting = False
         self.connected = False
         self.remote_addr = None
@@ -116,20 +106,10 @@ class evsocket():
         sockets[id(self)] = self
         runEventLoop()
     
-    def handleRead(self):
-        print "handleRead()"
-    
-    def handleWrite(self):
-        print "handleWrite()"
-        #self.bufferevent.disable(event.EV_WRITE)
-    
-    def handleError(self):
-        print "handleError()"
-    
     def __getattr__(self, attr):
         return getattr(self.sock, attr)
 
-    def listen(self, backlog=128):
+    def listen(self, backlog=1):
         self.accepting = True
         self.sock.listen(backlog)
 
@@ -147,7 +127,6 @@ class evsocket():
         s = evsocket(s)
         stackless.tasklet(self.accept_channel.send((s,a)))
 
-
     def connect(self, address):
         for i in range(10): # try to connect 10 times!
             if self.sock.connect_ex(address) == 0:
@@ -162,14 +141,7 @@ class evsocket():
     def send(self, data, *args):
         event.write(self.sock, self.handle_send, data)
         return self.write_channel.receive()
-        #print "send()"
-        #status = self.bufferevent.write(data)
-        #if status == 0:
-        #    return len(data)
-        #else:
-        #    print "bufferevent write error"
-        #    return status
-        
+
     def handle_send(self, data):
         stackless.tasklet(self.write_channel.send(self.sock.send(data)))
 
@@ -184,7 +156,6 @@ class evsocket():
 
     def recv(self, bytes, *args):
         event.read(self.sock, self.handle_recv, bytes)
-         
         return self.read_channel.receive()
     
     def handle_recv(self, bytes):
@@ -233,9 +204,11 @@ class evsocketssl(evsocket):
         stackless.tasklet(self.accept_channel.send((s,a)))
 
 
-# Very minimal test
 if __name__ == "__main__":
     sys.modules["socket"] = __import__(__name__)
+    
+    # Minimal Client Test
+    # TODO: Add a Minimal Server Test
     
     import urllib2
     
