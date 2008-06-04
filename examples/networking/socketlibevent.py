@@ -33,6 +33,7 @@ try:
 except:
     pass
 
+from errno import EALREADY, EINPROGRESS, EWOULDBLOCK, EISCONN, errorcode
 
 if "__all__" in stdsocket.__dict__:
     __all__ = stdsocket.__dict__["__all__"]
@@ -57,7 +58,7 @@ def eventLoop():
     global loop_running
     global event_errors
     
-    while sockets.values():
+    while sockets:
         # If there are other tasklets scheduled, then use the nonblocking loop,
         # else, use the blocking loop
         if stackless.getruncount() > 2: # main tasklet + this one
@@ -128,15 +129,14 @@ class evsocket():
         stackless.tasklet(self.accept_channel.send((s,a)))
 
     def connect(self, address):
-        for i in range(10): # try to connect 10 times!
-            if self.sock.connect_ex(address) == 0:
-                self.connected = True
-                self.remote_addr = address
-                return
-            stackless.schedule()
-        if not self.connected:
-            # One last try, just to raise an error
-            return self.sock.connect(address)
+        err = self.sock.connect_ex(address)
+        if err in (EINPROGRESS, EALREADY, EWOULDBLOCK):
+            return
+        if err in (0, EISCONN):
+            self.remote_addr = address
+            self.connected = True
+        else:
+            raise socket.error, (err, errorcode[err])
 
     def send(self, data, *args):
         event.write(self.sock, self.handle_send, data)
@@ -161,14 +161,15 @@ class evsocket():
     def handle_recv(self, bytes):
         stackless.tasklet(self.read_channel.send(self.sock.recv(bytes)))
     
-    def recvfrom(self, bytes, *args):
-        event.read(self.sock, self.handle_recv, bytes)
-        return self.read_channel.receive()
+    #def recvfrom(self, bytes, *args):
+    #    event.read(self.sock, self.handle_recv, bytes)
+    #    return self.read_channel.receive()
 
-    def handle_recvfrom(self, bytes):
-        stackless.tasklet(self.read_channel.send(self.sock.recvfrom(bytes)))
+    #def handle_recvfrom(self, bytes):
+    #    stackless.tasklet(self.read_channel.send(self.sock.recvfrom(bytes)))
 
     def makefile(self, mode='r', bufsize=-1):
+        # XXX Implement a fileobject
         self.fileobject = stdsocket._fileobject(self, mode, bufsize)
         return self.fileobject
 
