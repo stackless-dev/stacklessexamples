@@ -208,16 +208,58 @@ class evsocketssl(evsocket):
 if __name__ == "__main__":
     sys.modules["socket"] = __import__(__name__)
     
-    # Minimal Client Test
-    # TODO: Add a Minimal Server Test
+    from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
+    import urllib, urllib2
+
+    num = 0
+
+    class RequestHandler(BaseHTTPRequestHandler):
+        # Respect keep alive requests.
+        protocol_version = "HTTP/1.1"
+        
+        def do_GET(self):
+            global num
+            body = "fetch %i" % num
+            num += 1
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain")
+            self.send_header("Content-Length", len(body))
+            self.end_headers()
+            self.wfile.write(body)
+
+    class StacklessHTTPServer(HTTPServer):
+        def handle_request(self):
+            try:
+                request, client_address = self.get_request()
+            except socket.error:
+                return
+            stackless.tasklet(self.handle_request_tasklet)(request, client_address)
+
+        def handle_request_tasklet(self, request, client_address):
+            if self.verify_request(request, client_address):
+                try:
+                    self.process_request(request, client_address)
+                except:
+                    self.handle_error(request, client_address)
+                    self.close_request(request)
     
-    import urllib2
     
-    def test(i):
-        print "url read", i
-        print urllib2.urlopen("http://www.google.com").read(12)
+    server = StacklessHTTPServer(('', 8080), RequestHandler)
+    stackless.tasklet(server.serve_forever)()
+    
+    
+    def test_urllib(i):
+        print "urllib test", i
+        print urllib.urlopen("http://localhost:8080").read()
+    
+    def test_urllib2(i):
+        print "urllib2 test", i
+        print urllib2.urlopen("http://localhost:8080").read()
     
     for i in range(5):
-        stackless.tasklet(test)(i)
+        stackless.tasklet(test_urllib)(i)
+        
+    for i in range(5):
+        stackless.tasklet(test_urllib2)(i)
     
     stackless.run()
