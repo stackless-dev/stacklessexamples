@@ -6,7 +6,7 @@
 # the connected client list.
 #
 # The example is based on mud.py but uses the standard dispatcher creating a
-# tasklet for each connected client.
+# tasklet for each connectedclient.
 #
 # Author: Carlos Eduardo de Paula <carlosedp@gmail.com>
 #
@@ -41,7 +41,7 @@ class Server(object):
         stackless.tasklet(self.acceptConn)()
 
     def acceptConn(self):
-        while self.serversocket.accepting:
+        while self.serversocket.accept:
             # Accept connections from outside
             (clientsocket, address) = self.serversocket.accept()
             # Now do something with the clientsocket
@@ -58,7 +58,7 @@ class Server(object):
             clientsocket.close()
             return
         data = ''
-        while clientsocket.connected:
+        while clientsocket.connect:
             data += clientsocket.recv(4096)
             if data == '':
                 break
