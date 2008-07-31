@@ -162,7 +162,7 @@ class Server:
 
         logging.info("Accepting connections on %s %s", self.host, self.port)
         try:
-            while listenSocket.accepting:
+            while 1:
                 clientSocket, clientAddress = listenSocket.accept()
                 Connection(clientSocket, clientAddress)
                 stackless.schedule()
