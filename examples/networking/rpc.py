@@ -17,6 +17,7 @@ import stackless
 import stacklesssocket
 stacklesssocket.install()
 import socket
+import weakref
 
 import types, struct, cPickle
 
@@ -121,20 +122,27 @@ if __name__ == "__main__":
 
             self.endPoints = []
 
-            stackless.tasklet(self.ManageSocket)(listenSocket)
+            self.accepting = False
+
+            t = stackless.tasklet(self.ManageSocket)(listenSocket)
+            self.listenTasklet = weakref.proxy(t)
 
         def ManageSocket(self, listenSocket):
+            self.accepting = True
             try:
-                while listenSocket.accepting:
+                while 1:
                     epSocket, clientAddress = listenSocket.accept()
                     endPoint = ServerEndPoint(epSocket)
                     self.endPoints.append(endPoint)
             except socket.error:
                 pass # Listen socket disconnected.  Our job is done.
+            finally:
+                self.accepting = False
 
-            if listenSocket.accepting:
                 listenSocket.close()
-            self.endPoints = []
+                for ep in self.endPoints:
+                    ep.socket.close()
+                self.endPoints = []
 
     class ClientEndPoint(EndPoint):
         def Hello(self):
@@ -154,27 +162,38 @@ if __name__ == "__main__":
 
     # Then connect the client.
     client = ClientEndPoint(clientSocket)
-
+    
     def ClientTasklet(client, server, clientSocket):
         # Tell the server hello.
         ret = client.otherEnd.Hello()
         print "  CLIENT GOT", ret
 
-        stackless.tasklet(ServerTasklet)(server)
-        while server.socket.connected:
+        # Start the server tasklet which will call on the
+        # client-side.  We need to keep the client-side open
+        # until it has completed its work.
+        serverTasklet = stackless.tasklet(ServerTasklet)(server)
+        while serverTasklet.alive:
             stackless.schedule()
-        clientSocket.close()
 
+        # Close the client connection.
+        clientSocket.close()
+        # Close the server end of the client connection.
+        client.socket.close()
+    
     def ServerTasklet(server):
         # Tell all the clients hello.
         for endpoint in server.endPoints:
             ret = endpoint.otherEnd.Hello()
             print "  SERVER GOT", ret, "FROM CLIENT"
-        #for endpoint in server.endPoints:
-        #    endpoint.socket.close()
+
+        # Make sure all the tasklets are dead so the scheduler can exit.
+        server.listenTasklet.kill()
         server.socket.close()
 
     stackless.tasklet(ClientTasklet)(client, server, clientSocket)
+    # Run until there are no tasklets left running.  Keep in mind that
+    # as long as sockets are still open, asyncore will keep its
+    # management.. managing them.
     stackless.run()
 
     print "Scheduler exited"
