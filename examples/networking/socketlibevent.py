@@ -8,6 +8,13 @@
 |                                                                           |
 | Usage: import sys, socketlibevent; sys.modules['socket'] = socketlibevent |
 |___________________________________________________________________________|
+|                                                                           |
+|               Based on Richard Tew's stacklesssocket module.              |
+|                         Uses Dug Song's pyevent.                          |
+|          Nice socket globals import ripped from Minor Gordon's Yield.     |
+|                                                                           |
+|                             THANKS A HEAP !!                              |
+|___________________________________________________________________________|
 
 """
 
@@ -33,7 +40,6 @@ try:
 except:
     pass
 
-from errno import EALREADY, EINPROGRESS, EWOULDBLOCK, EISCONN, errorcode
 
 if "__all__" in stdsocket.__dict__:
     __all__ = stdsocket.__dict__["__all__"]
@@ -58,7 +64,7 @@ def eventLoop():
     global loop_running
     global event_errors
     
-    while sockets:
+    while sockets.values():
         # If there are other tasklets scheduled, then use the nonblocking loop,
         # else, use the blocking loop
         if stackless.getruncount() > 2: # main tasklet + this one
@@ -129,14 +135,15 @@ class evsocket():
         stackless.tasklet(self.accept_channel.send((s,a)))
 
     def connect(self, address):
-        err = self.sock.connect_ex(address)
-        if err in (EINPROGRESS, EALREADY, EWOULDBLOCK):
-            return
-        if err in (0, EISCONN):
-            self.remote_addr = address
-            self.connected = True
-        else:
-            raise socket.error, (err, errorcode[err])
+        for i in range(10): # try to connect 10 times!
+            if self.sock.connect_ex(address) == 0:
+                self.connected = True
+                self.remote_addr = address
+                return
+            stackless.schedule()
+        if not self.connected:
+            # One last try, just to raise an error
+            return self.sock.connect(address)
 
     def send(self, data, *args):
         event.write(self.sock, self.handle_send, data)
@@ -161,15 +168,14 @@ class evsocket():
     def handle_recv(self, bytes):
         stackless.tasklet(self.read_channel.send(self.sock.recv(bytes)))
     
-    #def recvfrom(self, bytes, *args):
-    #    event.read(self.sock, self.handle_recv, bytes)
-    #    return self.read_channel.receive()
+    def recvfrom(self, bytes, *args):
+        event.read(self.sock, self.handle_recv, bytes)
+        return self.read_channel.receive()
 
-    #def handle_recvfrom(self, bytes):
-    #    stackless.tasklet(self.read_channel.send(self.sock.recvfrom(bytes)))
+    def handle_recvfrom(self, bytes):
+        stackless.tasklet(self.read_channel.send(self.sock.recvfrom(bytes)))
 
     def makefile(self, mode='r', bufsize=-1):
-        # XXX Implement a fileobject
         self.fileobject = stdsocket._fileobject(self, mode, bufsize)
         return self.fileobject
 
@@ -208,58 +214,16 @@ class evsocketssl(evsocket):
 if __name__ == "__main__":
     sys.modules["socket"] = __import__(__name__)
     
-    from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
-    import urllib, urllib2
-
-    num = 0
-
-    class RequestHandler(BaseHTTPRequestHandler):
-        # Respect keep alive requests.
-        protocol_version = "HTTP/1.1"
-        
-        def do_GET(self):
-            global num
-            body = "fetch %i" % num
-            num += 1
-            self.send_response(200)
-            self.send_header("Content-type", "text/plain")
-            self.send_header("Content-Length", len(body))
-            self.end_headers()
-            self.wfile.write(body)
-
-    class StacklessHTTPServer(HTTPServer):
-        def handle_request(self):
-            try:
-                request, client_address = self.get_request()
-            except socket.error:
-                return
-            stackless.tasklet(self.handle_request_tasklet)(request, client_address)
-
-        def handle_request_tasklet(self, request, client_address):
-            if self.verify_request(request, client_address):
-                try:
-                    self.process_request(request, client_address)
-                except:
-                    self.handle_error(request, client_address)
-                    self.close_request(request)
+    # Minimal Client Test
+    # TODO: Add a Minimal Server Test
     
+    import urllib2
     
-    server = StacklessHTTPServer(('', 8080), RequestHandler)
-    stackless.tasklet(server.serve_forever)()
-    
-    
-    def test_urllib(i):
-        print "urllib test", i
-        print urllib.urlopen("http://localhost:8080").read()
-    
-    def test_urllib2(i):
-        print "urllib2 test", i
-        print urllib2.urlopen("http://localhost:8080").read()
+    def test(i):
+        print "url read", i
+        print urllib2.urlopen("http://www.google.com").read(12)
     
     for i in range(5):
-        stackless.tasklet(test_urllib)(i)
-        
-    for i in range(5):
-        stackless.tasklet(test_urllib2)(i)
+        stackless.tasklet(test)(i)
     
-    stackless.run()
+    stackless.run()s
