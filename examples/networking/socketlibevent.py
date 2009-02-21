@@ -1,22 +1,16 @@
-"""
- ___________________________________________________________________________
-|                   |             |                         |               |
-| socketlibevent.py | MIT License | phoenix@burninglabs.com |  April 2008   |
-|___________________|_____________|_________________________|_______________|
-|                                                                           |  
-|   Non-blocking socket I/O for Stackless Python using libevent / pyevent   |
-|                                                                           |
-| Usage: import sys, socketlibevent; sys.modules['socket'] = socketlibevent |
-|___________________________________________________________________________|
-|                                                                           |
-|               Based on Richard Tew's stacklesssocket module.              |
-|                         Uses Dug Song's pyevent.                          |
-|          Nice socket globals import ripped from Minor Gordon's Yield.     |
-|                                                                           |
-|                             THANKS A HEAP !!                              |
-|___________________________________________________________________________|
+#  socketlibevent.py - MIT License
+#  phoenix@burninglabs.com
+#
+#  Non-blocking socket I/O for Stackless Python using libevent, via pyevent.
+#
+#  Usage:
+#      import sys, socketlibevent; sys.modules['socket'] = socketlibevent
+#
+#  Based on Richard Tew's stacklesssocket module.
+#  Uses Dug Song's pyevent.
+#
+#  Thanks a Heap !
 
-"""
 
 import stackless, sys, time, traceback
 from weakref import WeakValueDictionary
@@ -26,21 +20,15 @@ from socket import _fileobject
 try: import event
 except: sys.exit("This module requires libevent and pyevent.")
 
-# For SSL support, this module uses the 'ssl' module:
-#                                              'http://pypi.python.org/pypi/ssl/
+# For SSL support, this module uses the 'ssl' module (built in from 2.6 up):
+#               ('back-port' for Python < 2.6: http://pypi.python.org/pypi/ssl/)
 try:
     import ssl as ssl_
     ssl_enabled = True
 except:
     ssl_enabled = False
 
-try:
-    import psyco
-    psyco.full()
-except:
-    pass
-
-
+#  Nice socket globals import ripped from Minor Gordon's Yield.
 if "__all__" in stdsocket.__dict__:
     __all__ = stdsocket.__dict__["__all__"]
     globals().update((key, value) for key, value in\
@@ -180,8 +168,8 @@ class evsocket():
         return self.fileobject
 
     def close(self):
+        # XXX Stupid workaround
         # Don't close while the fileobject is still using the fakesocket
-        # XXX Temporary fix
         def _close():
             while self.fileobject._sock == self:
                 stackless.schedule()
@@ -226,4 +214,4 @@ if __name__ == "__main__":
     for i in range(5):
         stackless.tasklet(test)(i)
     
-    stackless.run()s
+    stackless.run()
