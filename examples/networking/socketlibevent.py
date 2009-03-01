@@ -17,8 +17,18 @@ from weakref import WeakValueDictionary
 import socket as stdsocket
 from socket import _fileobject
 
-try: import event
-except: sys.exit("This module requires libevent and pyevent.")
+try:
+    import event
+except:
+    try:
+        import rel; rel.override()
+        import event
+    except:
+        print "please install libevent and pyevent"
+                # http://code.google.com/p/pyevent/
+        print "(or 'stackless ez_setup.py rel' for quick testing)"
+                # http://code.google.com/p/registeredeventlistener/
+        sys.exit()
 
 # For SSL support, this module uses the 'ssl' module (built in from 2.6 up):
 #               ('back-port' for Python < 2.6: http://pypi.python.org/pypi/ssl/)
@@ -38,7 +48,13 @@ else:
     globals().update((key, value) for key, value in\
         stdsocket.__dict__.iteritems() if key.upper() == key or key in\
                                                                      other_keys)
+_GLOBAL_DEFAULT_TIMEOUT = 0.1
 
+# simple decorator to run a function in a tasklet
+def tasklet(task):
+    def run(*args, **kwargs):
+        stackless.tasklet(task)(*args, **kwargs)
+    return run
 
 # Event Loop Management
 loop_running = False
@@ -47,14 +63,17 @@ sockets = WeakValueDictionary()
 def die():
     global sockets
     sockets = {}
+    sys.exit()
 
+@tasklet
 def eventLoop():
     global loop_running
     global event_errors
     
     while sockets.values():
-        # If there are other tasklets scheduled, then use the nonblocking loop,
-        # else, use the blocking loop
+        # If there are other tasklets scheduled:
+        #     use the nonblocking loop
+        # else: use the blocking loop
         if stackless.getruncount() > 2: # main tasklet + this one
             event.loop(True)
         else:
@@ -67,14 +86,20 @@ def runEventLoop():
     if not loop_running:
         event.init()
         event.signal(2, die)
-        stackless.tasklet(eventLoop)()
+        event.signal(3, die)
+        eventLoop()
         loop_running = True
 
 
 # Replacement Socket Module Functions
 def socket(family=AF_INET, type=SOCK_STREAM, proto=0):
     return evsocket(stdsocket.socket(family, type, proto))
-    
+
+def create_connection(address, timeout=0.1):
+    s = socket()
+    s.connect(address, timeout)
+    return s
+
 def ssl(sock, keyfile=None, certfile=None):
     if ssl_enabled:
         return evsocketssl(sock, keyfile, certfile)
@@ -104,9 +129,9 @@ class evsocket():
     def __getattr__(self, attr):
         return getattr(self.sock, attr)
 
-    def listen(self, backlog=1):
+    def listen(self, backlog=255):
         self.accepting = True
-        self.sock.listen(backlog)
+        return self.sock.listen(backlog)
 
     def accept(self):
         if not self.accept_channel:
@@ -115,20 +140,20 @@ class evsocket():
                         evtype=event.EV_READ | event.EV_PERSIST).add()
         return self.accept_channel.receive()
 
+    @tasklet
     def handle_accept(self, ev, sock, event_type, *arg):
         s, a = self.sock.accept()
         s.setsockopt(stdsocket.SOL_SOCKET, stdsocket.SO_REUSEADDR, 1)
-        s.setsockopt(stdsocket.IPPROTO_TCP, stdsocket.TCP_NODELAY, 1)
         s = evsocket(s)
-        stackless.tasklet(self.accept_channel.send((s,a)))
+        self.accept_channel.send((s,a))
 
-    def connect(self, address):
-        for i in range(10): # try to connect 10 times!
+    def connect(self, address, timeout=0.1):
+        endtime = time.time() + timeout
+        while time.time() < endtime:
             if self.sock.connect_ex(address) == 0:
                 self.connected = True
                 self.remote_addr = address
                 return
-            stackless.schedule()
         if not self.connected:
             # One last try, just to raise an error
             return self.sock.connect(address)
@@ -137,8 +162,9 @@ class evsocket():
         event.write(self.sock, self.handle_send, data)
         return self.write_channel.receive()
 
+    @tasklet
     def handle_send(self, data):
-        stackless.tasklet(self.write_channel.send(self.sock.send(data)))
+        self.write_channel.send(self.sock.send(data))
 
     def sendall(self, data, *args):
         while data:
@@ -153,15 +179,17 @@ class evsocket():
         event.read(self.sock, self.handle_recv, bytes)
         return self.read_channel.receive()
     
+    @tasklet
     def handle_recv(self, bytes):
-        stackless.tasklet(self.read_channel.send(self.sock.recv(bytes)))
+        self.read_channel.send(self.sock.recv(bytes))
     
     def recvfrom(self, bytes, *args):
         event.read(self.sock, self.handle_recv, bytes)
         return self.read_channel.receive()
 
+    @tasklet
     def handle_recvfrom(self, bytes):
-        stackless.tasklet(self.read_channel.send(self.sock.recvfrom(bytes)))
+        self.read_channel.send(self.sock.recvfrom(bytes))
 
     def makefile(self, mode='r', bufsize=-1):
         self.fileobject = stdsocket._fileobject(self, mode, bufsize)
@@ -191,12 +219,13 @@ class evsocketssl(evsocket):
         # TODO Implement a non-blocking handshake
         self.sock = ssl_.wrap_socket(sock, keyfile, certfile, server_side)
 
+    @tasklet
     def handle_accept(self, ev, sock, event_type, *arg):
         s, a = self.sock.accept()
         s.setsockopt(stdsocket.SOL_SOCKET, stdsocket.SO_REUSEADDR, 1)
         s.setsockopt(stdsocket.IPPROTO_TCP, stdsocket.TCP_NODELAY, 1)
         s = evsocketssl(s)
-        stackless.tasklet(self.accept_channel.send((s,a)))
+        self.accept_channel.send((s,a))
 
 
 if __name__ == "__main__":
@@ -207,11 +236,12 @@ if __name__ == "__main__":
     
     import urllib2
     
+    @tasklet
     def test(i):
         print "url read", i
         print urllib2.urlopen("http://www.google.com").read(12)
     
     for i in range(5):
-        stackless.tasklet(test)(i)
+        test(i)
     
     stackless.run()
