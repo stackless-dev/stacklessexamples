@@ -104,7 +104,7 @@ def socket(*args, **kwargs):
 
 
 class _new_socket(object):
-    __doc__ = _old_socket.__doc__
+    _old_socket.__doc__
 
     def __init__(self, family=AF_INET, type=SOCK_STREAM, proto=0, fileno=None):
         sock = _old_socket(family, type, proto, fileno)
@@ -240,7 +240,24 @@ class _fakesocket(asyncore.dispatcher):
         return waitChannel.receive()
 
     # Read at most byteCount bytes.
-    def recv(self, byteCount, flags=0):        
+    def recv(self, byteCount, flags=0):
+        b = bytearray()
+        self.recv_into(b, byteCount, flags)
+        return b
+
+    def recvfrom(self, byteCount, flags=0):
+        if self.socket.type == SOCK_STREAM:
+            return self.recv(byteCount), None
+
+        # recvfrom() must not concatenate two or more packets.
+        # Each call should return the first 'byteCount' part of the packet.
+        data, address = self.recvChannel.receive()
+        return data[:byteCount], address
+
+    def recv_into(self, buffer, nbytes=0, flags=0):
+        if len(buffer):
+            nbytes = len(buffer)
+
         # recv() must not concatenate two or more data fragments sent with
         # send() on the remote side. Single fragment sent with single send()
         # call should be split into strings of length less than or equal
@@ -263,36 +280,21 @@ class _fakesocket(asyncore.dispatcher):
             self.readIdx = 0
             remainingBytes = len(self.readBytes)
 
-        if byteCount == 1 and remainingBytes:
-            ret = self.readBytes[self.readIdx]
+        if nbytes == 1 and remainingBytes:
+            buffer[:] = self.readBytes[self.readIdx]
             self.readIdx += 1
-        elif self.readIdx == 0 and byteCount >= len(self.readBytes):
-            ret = self.readBytes
+            return 1
+
+        if self.readIdx == 0 and (nbytes == 0 or nbytes >= len(self.readBytes)):
+            buffer[:] = self.readBytes
             self.readBytes = bytearray()
-        else:
-            idx = self.readIdx + byteCount
-            ret = self.readBytes[self.readIdx:idx]
-            self.readBytes = self.readBytes[idx:]
-            self.readIdx = 0
+            return len(self.readBytes)
 
-        # ret will be '' when EOF.
-        return ret
-
-    def recvfrom(self, byteCount, flags=0):
-        if self.socket.type == SOCK_STREAM:
-            return self.recv(byteCount), None
-
-        # recvfrom() must not concatenate two or more packets.
-        # Each call should return the first 'byteCount' part of the packet.
-        data, address = self.recvChannel.receive()
-        return data[:byteCount], address
-
-    def recv_into(self, buffer, nbytes=0, flags=0):
-        if nbytes == 0:
-            nbytes = len(buffer)
-
-        buffer[:] = self.recv(nbytes)
-        return len(buffer)
+        idx = self.readIdx + nbytes
+        buffer[:] = self.readBytes[self.readIdx:idx]
+        self.readBytes = self.readBytes[idx:]
+        self.readIdx = 0
+        return nbytes
 
     def close(self):
         asyncore.dispatcher.close(self)
