@@ -151,6 +151,7 @@ class _fakesocket(asyncore.dispatcher):
         self.socket = realSocket
 
         self.recvChannel = stackless.channel()
+        self.recvChannel.preference = 0
         self.readBytes = bytearray()
         self.readIdx = 0
 
@@ -357,7 +358,15 @@ class _fakesocket(asyncore.dispatcher):
                 # asyncore.
                 if not ret:
                     self.close()
-            stackless.tasklet(self.recvChannel.send)(ret)
+
+            # Do not block.
+            if self.recvChannel.balance < 0:
+                # The channel prefers the sender.  This means if there are waiting 
+                # receivers, the first will be scheduled with the given data.
+                self.recvChannel.send(ret)
+            else:
+                # No waiting receivers.  The send needs to block in a tasklet.
+                stackless.tasklet(self.recvChannel.send)(ret)
         except stdsocket.error as err:
             # If there's a read error assume the connection is
             # broken and drop any pending output
