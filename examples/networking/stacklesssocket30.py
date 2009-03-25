@@ -77,9 +77,12 @@ managerRunning = False
 def ManageSockets():
     global managerRunning
 
+    t = stackless.getcurrent()
     while len(asyncore.socket_map):
         # Check the sockets for activity.
-        asyncore.poll(0.05)
+        t.block_trap = False
+        asyncore.poll(0.01)
+        t.block_trap = True
         # Yield to give other tasklets a chance to be scheduled.
         stackless.schedule()
 
@@ -286,10 +289,16 @@ class _fakesocket(asyncore.dispatcher):
             self.readIdx += 1
             return 1
 
-        if self.readIdx == 0 and (nbytes == 0 or nbytes >= len(self.readBytes)):
+        if nbytes == 0:
+            nbytes = len(self.readBytes)
+            if nbytes == 0:
+                buffer[:] = []
+                return 0
+
+        if self.readIdx == 0 and nbytes >= len(self.readBytes):
             buffer[:] = self.readBytes
             self.readBytes = bytearray()
-            return len(self.readBytes)
+            return nbytes
 
         idx = self.readIdx + nbytes
         buffer[:] = self.readBytes[self.readIdx:idx]
@@ -327,7 +336,6 @@ class _fakesocket(asyncore.dispatcher):
                 return
             currentSocket, clientAddress = t
             currentSocket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
-            #currentSocket = self.__class__(currentSocket)
             currentSocket.wasConnected = True
             stackless.tasklet(self.acceptChannel.send)((currentSocket, clientAddress))
 
