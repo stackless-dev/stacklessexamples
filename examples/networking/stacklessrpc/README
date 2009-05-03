@@ -1,0 +1,19 @@
+Stackless RPC v0.1
+
+Purpose
+-------
+
+This module is intended to allow tasklets to make synchronous calls across the
+wire.  One of the benefits of Stackless, and other decent coroutine
+implementations, is the ability to abstract away details in this manner so
+that the programmer can write more readable code by avoiding broken
+control flow.
+
+Dependencies
+------------
+
+ * Stackless Python.
+   - http://www.stackless.com
+ * A monkeypatched replacement socket module.
+   - http://code.google.com/p/stacklessexamples/wiki/StacklessNetworking
+
