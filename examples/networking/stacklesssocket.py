@@ -76,7 +76,7 @@ def ManageSockets():
         # Check the sockets for activity.
         asyncore.poll(0.05)
         # Yield to give other tasklets a chance to be scheduled.
-        stackless.schedule()
+        _schedule()
 
     managerRunning = False
 
@@ -86,6 +86,7 @@ def StartManager():
         managerRunning = True
         stackless.tasklet(ManageSockets)()
 
+_schedule = stackless.schedule
 _manage_sockets_func = StartManager
 
 def stacklesssocket_manager(mgr):
@@ -209,7 +210,7 @@ class _fakesocket(asyncore.dispatcher):
     @check_still_connected
     def send(self, data, flags=0):
         self.sendBuffer += data
-        stackless.schedule()
+        _schedule()
         return len(data)
 
     @check_still_connected
@@ -219,7 +220,7 @@ class _fakesocket(asyncore.dispatcher):
         # the use of a channel.
         self.sendBuffer += data
         while self.sendBuffer:
-            stackless.schedule()
+            _schedule()
         return len(data)
 
     def sendto(self, sendData, sendArg1=None, sendArg2=None):
