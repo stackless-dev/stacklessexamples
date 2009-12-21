@@ -198,6 +198,7 @@ class _fakesocket(asyncore.dispatcher):
 
     def connect(self, address):
         asyncore.dispatcher.connect(self, address)
+        
         # UDP sockets do not connect.
         if self.socket.type != SOCK_DGRAM and not self.connected:
             if not self.connectChannel:
@@ -332,7 +333,11 @@ class _fakesocket(asyncore.dispatcher):
     # Asyncore says its done but self.readBuffer may be non-empty
     # so can't close yet.  Do nothing and let 'recv' trigger the close.
     def handle_close(self):
-        pass
+        # This also gets called in the case that a non-blocking connect gets
+        # back to us with a no.  If we don't reject the connect, then all
+        # connect calls that do not connect will block indefinitely.
+        if self.connectChannel is not None:
+            self.close()
 
     # Some error, just close the channel and let that raise errors to
     # blocked calls.
