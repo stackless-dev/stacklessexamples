@@ -72,19 +72,20 @@ managerRunning = False
 def ManageSockets():
     global managerRunning
 
-    while len(asyncore.socket_map):
-        # Check the sockets for activity.
-        asyncore.poll(0.05)
-        # Yield to give other tasklets a chance to be scheduled.
-        _schedule()
-
-    managerRunning = False
+    try:
+        while len(asyncore.socket_map):
+            # Check the sockets for activity.
+            asyncore.poll(0.05)
+            # Yield to give other tasklets a chance to be scheduled.
+            _schedule()
+    finally:
+        managerRunning = False
 
 def StartManager():
     global managerRunning
     if not managerRunning:
         managerRunning = True
-        stackless.tasklet(ManageSockets)()
+        return stackless.tasklet(ManageSockets)()
 
 _schedule = stackless.schedule
 _manage_sockets_func = StartManager
