@@ -88,7 +88,17 @@ schedule = stackless.schedule
 
 # We need to subclass it so that we can store attributes on it.
 class Tasklet(stackless.tasklet):
-    pass
+    def __call__(self, *args, **kwargs):
+        oldFunction = self.tempval
+        def newFunction(oldFunction, args, kwargs):
+            try:
+                oldFunction(*args, **kwargs) 
+            except Exception, e:
+                traceback.print_exc()
+                raise e
+        self.tempval = newFunction
+        stackless.tasklet.setup(self, oldFunction, args, kwargs)
+        return self
 
 def new(func, *args, **kw):
     return Tasklet(func)(*args, **kw)
@@ -177,11 +187,26 @@ def CheckSleepingTasklets():
             channel = sleepingTasklets[0][1]
             del sleepingTasklets[0]
             # We have to send something, but it doesn't matter what as it is not used.
-            channel.send(None)
+            # Handle the case where the tasklet has been prematurely killed, otherwise
+            # the caller will be blocked indefinitely.
+            if channel.balance:
+                channel.send(None)
+
+def KillSleepingTasklets():
+    global sleepingTasklets
+    if len(sleepingTasklets):
+        for timestamp, channel in sleepingTasklets:
+            t = channel.queue
+            while t is not None:
+                toBeKilled = t
+                t = t.next
+                toBeKilled.raise_exception(TaskletExit)
+        sleepingTasklets = []
 
 # Being nice related logic.
 
 yieldChannel = stackless.channel()
+yieldChannel.preference = 1
 
 def BeNice():
     '''
@@ -207,6 +232,9 @@ def RunNiceTasklets():
 
 # Scheduling related logic.
 
+class TimeoutException(Exception):
+    pass
+
 def Run():
     '''
     Use instead of stackless.run() in order.to allow Sleep and BeNice
@@ -218,13 +246,14 @@ def Run():
     This function will exit when there are no remaining tasklets to run,
     whether being nice or sleeping.
     '''
-    while yieldChannel.balance or len(sleepingTasklets):
+    while yieldChannel.balance or len(sleepingTasklets) or stackless.runcount > 1:
         RunNiceTasklets()
-        t = stackless.run(10000000)
+        t = stackless.run(500000)
         if t is not None:
-            # Need better standard handling of this case.
-            # Could StackTrace I guess?
-            raise RuntimeError("Runaway tasklet", t)
+            print "*** Uncooperative tasklet", t, "detected ***"
+            traceback.print_stack(t.frame)
+            print "*** Uncooperative tasklet", t, "being sent exception ***"
+            t.raise_exception(TimeoutException)
         CheckSleepingTasklets()
 
 semaphores               = weakref.WeakKeyDictionary({})
