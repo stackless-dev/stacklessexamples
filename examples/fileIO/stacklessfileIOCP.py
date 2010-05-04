@@ -125,7 +125,7 @@ class resultsManager(object):
     """
     def __init__(self, numThreads=NULL):
         self.running = True
-        self.handle = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL,
+        self.handle = CreateIoCompletionPort(INVALID_HANDLE_VALUE, HANDLE(0),
                                              NULL, numThreads)
         if self.handle == 0:
             raise WinError()
@@ -304,7 +304,7 @@ class stacklessfileIOCP(object):
 
         self.handle = func(self.name, access,
                               share, c_void_p(), disposition,
-                              flags, NULL )
+                              flags, HANDLE(0) )
 
         if self.handle == INVALID_HANDLE_VALUE:
             raise WinError()
