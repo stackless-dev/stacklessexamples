@@ -27,9 +27,13 @@
 #   send is a little over the top.  It should be possible to add it to the
 #   rest of the queued data
 
+# Small parts of this code are taken with permission from an internal version
+# of this module in use at CCP Games.
+
 import stackless
 import asyncore, weakref
 import socket as stdsocket # We need the "socket" name for the function we export.
+from errno import EWOULDBLOCK
 
 # If we are to masquerade as the socket module, we need to provide the constants.
 if "__all__" in stdsocket.__dict__:
@@ -346,27 +350,48 @@ class _fakesocket(asyncore.dispatcher):
         self.close()
 
     def handle_read(self):
+        """
+        Receive data until we are told it is a blocking operation.  But limit
+        how much we receive, because in the case of large amounts of data,
+        this may loop for prolonged amounts of time receiving.
+        """
+        chunks = []
+        recvdSize = 0
+        chunkSize = 1024 * 1024
         try:
-            if self.socket.type == SOCK_DGRAM:
-                ret = self.socket.recvfrom(20000)
-            else:
-                ret = asyncore.dispatcher.recv(self, 20000)
-                # Not sure this is correct, but it seems to give the
-                # right behaviour.  Namely removing the socket from
-                # asyncore.
-                if not ret:
-                    self.close()
-            stackless.tasklet(self.recvChannel.send)(ret)
+            while recvdSize < chunkSize:
+                recvSize = chunkSize -  recvdSize
+                if self.socket.type == SOCK_DGRAM:
+                    ret = self.socket.recvfrom(recvSize)
+                else:
+                    ret = asyncore.dispatcher.recv(self, recvSize)
+                    # Not sure this is correct, but it seems to give the
+                    # right behaviour.  Namely removing the socket from
+                    # asyncore.
+                    if not ret:
+                        self.close()
+                        break
+                recvdSize += len(ret)
+                chunks.append(ret)
         except stdsocket.error, err:
-            # If there's a read error assume the connection is
-            # broken and drop any pending output
-            if self.sendBuffer:
-                self.sendBuffer = ""
-            self.recvChannel.send_exception(stdsocket.error, err)
+            if err[0] != EWOULDBLOCK:
+                # If there's a read error assume the connection is
+                # broken and drop any pending output
+                if self.sendBuffer:
+                    self.sendBuffer = ""
+                self.recvChannel.send_exception(stdsocket.error, err)
+                return
+
+        if recvdSize > 0:
+            if len(chunks) == 1:
+                stackless.tasklet(self.recvChannel.send)(ret)
+            else:
+                stackless.tasklet(self.recvChannel.send)("".join(chunks))
 
     def handle_write(self):
+        chunkSize = 64 * 1024
         if len(self.sendBuffer):
-            sentBytes = asyncore.dispatcher.send(self, self.sendBuffer[:512])
+            sentBytes = asyncore.dispatcher.send(self, self.sendBuffer[:chunkSize])
             self.sendBuffer = self.sendBuffer[sentBytes:]
         elif len(self.sendToBuffers):
             data, address, channel, oldSentBytes = self.sendToBuffers[0]
