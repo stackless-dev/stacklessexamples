@@ -1,49 +1,14 @@
 import thread
 import stackless
 
+
+import stacklessthread
+stacklessthread.install()
+
 import stacklesssocket
 stacklesssocket.install()
 stacklesssocket.managerRunning = True
 
-if True:
-    # Try and make the thread module stackless compatible.
-    
-    stdallocate_lock = thread.allocate_lock
-
-    def thread__wait_for_lock(lock, blocking, channel):
-        print "StacklessLockTHREAD - ACQUIRING"
-        ret = lock.acquire(blocking)
-        print "StacklessLockTHREAD - ACQUIRED"
-        channel.send(ret)
-  
-    class Lock(object):
-        def __init__(self):
-            self.stdlock = stdallocate_lock()
-    
-        def acquire(self, blocking=1):
-            if blocking:
-                print "StacklessLock - BLOCKING IN A NEW THREAD"
-                channel = stackless.channel()
-                thread_id = thread.start_new_thread(thread__wait_for_lock, (self.stdlock, blocking, channel))
-                print "StacklessLock - WAITING"
-                return channel.receive()
-
-            return self.stdlock.acquire(blocking)
-
-        def XXXrelease(self):
-            return self.stdlock.release()
-
-        def __getattr__(self, name):
-            return getattr(self.stdlock, name)
-
-        def XXX__exit__(self, *args, **kwargs):
-            return self.stdlock.__exit__
-            raise NotImplementedError("sdsdS")
-  
-    def allocate_lock():
-        return Lock()
-
-    thread.allocate_lock = thread.allocate = allocate_lock
 
 import asyncore, traceback, sys, time, threading
 main_thread = threading.currentThread()
