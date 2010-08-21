@@ -27,8 +27,8 @@
 #   send is a little over the top.  It should be possible to add it to the
 #   rest of the queued data
 
-# Small parts of this code are taken with permission from an internal version
-# of this module in use at CCP Games.
+# Small parts of this code were contributed back with permission from an
+# internal version of this module in use at CCP Games.
 
 import stackless
 import asyncore, weakref
