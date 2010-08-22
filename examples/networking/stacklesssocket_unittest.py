@@ -12,6 +12,11 @@ stacklesssocket.managerRunning = True
 
 import asyncore, traceback, sys, time, threading
 main_thread = threading.currentThread()
+try:
+    main_thread_id = main_thread.ident
+except AttributeError:
+    print __file__, "Looks like Python 2.5, working around it"
+    main_thread_id = stackless.main.thread_id
 
 #import stacklessthread
 #stacklessthread.install()
@@ -74,7 +79,7 @@ def timeout_wrap_sleep(seconds, timeoutChannel, args):
 
 def main_thread_channel_timeout(seconds, timeoutChannel, args=None):
     #print "main_thread_channel_timeout:ENTER", seconds
-    if stackless.current.thread_id == main_thread.ident:
+    if stackless.current.thread_id == main_thread_id:
         #print "main_thread_channel_timeout:MAIN-THREAD"
         stackless.tasklet(timeout_wrap_sleep)(seconds, timeoutChannel, args)
     else:
@@ -173,7 +178,7 @@ last_poll_time = time.time()
 # Whether to monitor the threads (used by test_socket) in case of deadlock.
 if True:
     def thread_name(threadId):
-        if threadId == main_thread.ident:
+        if threadId == main_thread_id:
             return "main_thread"
         return "unknown"
 

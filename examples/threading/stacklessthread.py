@@ -21,7 +21,12 @@ stdsleep = time.sleep
 stdstart_new_thread = thread.start_new_thread
 stdselect = select.select
 
-main_thread_id = threading.currentThread().ident
+main_thread = threading.currentThread()
+try:
+    main_thread_id = main_thread.ident
+except AttributeError:
+    print __file__, "Looks like Python 2.5, working around it"
+    main_thread_id = stackless.main.thread_id
 
 def install():
     global stdallocate_lock
@@ -48,7 +53,7 @@ def _wait_for_sleep(seconds, channel):
     channel.send(ret)
 
 def _sleep(seconds):
-    if threading.currentThread().ident == main_thread_id:
+    if stackless.current.thread_id == main_thread_id:
         channel = stackless.channel()
         thread_id = stdstart_new_thread(_wait_for_sleep, (seconds, channel))
         return channel.receive()
@@ -61,7 +66,7 @@ def _wait_for_select(args, kwargs, channel):
     channel.send(ret)
 
 def _select(*args, **kwargs):
-    if threading.currentThread().ident == main_thread_id:
+    if stackless.current.thread_id == main_thread_id:
         channel = stackless.channel()
         thread_id = stdstart_new_thread(_wait_for_select, (args, kwargs, channel))
         return channel.receive()
