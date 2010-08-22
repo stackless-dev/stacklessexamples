@@ -16,18 +16,92 @@ main_thread = threading.currentThread()
 #import stacklessthread
 #stacklessthread.install()
 
-from test import test_socket, test_support
+def new_tasklet(f, *args, **kwargs):
+    try:
+        f(*args, **kwargs)
+    except Exception:
+        print "TASKLET CAUGHT EXCEPTION"
+        traceback.print_exc()
+
+from test import test_socket
 
 sleepingTasklets = []
+workerChannels = []
+
+# Limit the time worker tasklets are sitting around sleeping, so that they can return to the pool early if their channel is empty.
+MAX_SECONDS_TO_WAIT_PERIOD = 5.0
+
+def timeout_worker(workerChannel):
+    workerChannel.preference = 1 # Prefer the sender.
+    while True:
+        #print "timeout_worker:SLEEP", id(workerChannel)
+        workerChannels.append(workerChannel)
+        secondsToWait, sleeperChannel, args = workerChannel.receive()
+        #print "timeout_worker:WAKE", id(workerChannel), secondsToWait
+
+        #print "timeout_worker:SLEEP", secondsToWait, args
+        while secondsToWait > 1e-5 and sleeperChannel.balance < 0:
+            secondsToActuallyWait = min(secondsToWait, MAX_SECONDS_TO_WAIT_PERIOD)
+            secondsToWait -= secondsToActuallyWait
+            sleep(secondsToActuallyWait)
+        #print "timeout_worker:SLEPT", secondsToWait, args
+
+        if sleeperChannel.balance < 0:
+            #print "timeout_worker:WAKEUP", secondsToWait, args
+            if args is not None:
+                sleeperChannel.send_exception(*args)
+            else:
+                sleeperChannel.send(None)
+        #print "timeout_worker:DONE", secondsToWait, args
+
+# Start up a nominal amount of worker tasklets.    
+for i in range(10):
+    stackless.tasklet(new_tasklet)(timeout_worker, stackless.channel())
+
+def timeout_wrap_sleep(seconds, timeoutChannel, args):
+    #print "timeout_wrap_sleep:ENTER balance=%d" % channel.balance
+    if timeoutChannel.balance < 0:
+        #print "timeout_wrap_sleep:SLEEP balance=%d" % channel.balance
+        sleep(seconds)
+        #print "timeout_wrap_sleep:SLEPT balance=%d" % channel.balance
+        if timeoutChannel.balance < 0:
+            #print "timeout_wrap_sleep:WAKEUP balance=%d" % channel.balance
+            if args is not None:
+                timeoutChannel.send_exception(*args)
+            else:
+                timeoutChannel.send(None)
+    #print "timeout_wrap_sleep:EXIT balance=%d" % channel.balance
+
+def main_thread_channel_timeout(seconds, timeoutChannel, args=None):
+    #print "main_thread_channel_timeout:ENTER", seconds
+    if stackless.current.thread_id == main_thread.ident:
+        #print "main_thread_channel_timeout:MAIN-THREAD"
+        stackless.tasklet(timeout_wrap_sleep)(seconds, timeoutChannel, args)
+    else:
+        # Avoid creating new tasklets on secondary threads.
+        #print "main_thread_channel_timeout:SECONDARY-THREAD"
+        workerChannel = workerChannels.pop()
+        if workerChannel.balance < 0:
+            #print "main_thread_channel_timeout:WORKER-SEND"
+            workerChannel.send((seconds, timeoutChannel, args))
+            #print "main_thread_channel_timeout:WORKER-SENT"
+        else:
+            raise RuntimeError("Bad worker tasklet")
+    #print "main_thread_channel_timeout:EXIT"
 
 def sleep(secondsToWait):
     """ Put the current tasklet to sleep for a number of seconds. """
     channel = stackless.channel()
+    channel.preference = 1
     endTime = time.time() + secondsToWait
     sleepingTasklets.append((endTime, channel))
     sleepingTasklets.sort()
+    s = str(endTime) +" "+ str(sleepingTasklets[-1])
+    #print endTime, "ADDED A SLEEPING TASKLET AT ", time.time()
     # Block until we get sent an awakening notification.
-    channel.receive()
+    ret = channel.receive()
+    #print endTime, "REMOVED A SLEEPING TASKLET AT", time.time()
+    return ret
 
 def manage_sleeping_tasklets():
     """ Awaken all tasklets which are due to be awakened. """
@@ -43,6 +117,7 @@ def manage_sleeping_tasklets():
         stackless.schedule()
 
 stacklesssocket._sleep_func = sleep
+stacklesssocket._timeout_func = main_thread_channel_timeout
 
 
 ##############
@@ -50,29 +125,23 @@ stacklesssocket._sleep_func = sleep
 # More error context
 if True: 
     def clientRun(self, test_func):
-        print test_func, "A"
         self.server_ready.wait()
-        print test_func, "B"
         self.client_ready.set()
-        print test_func, "C"
         self.clientSetUp()
-        print test_func, "D"
         if not callable(test_func):
             raise TypeError, "test_func must be a callable function"
         try:
             test_func()
-            print test_func, "E"
         except Exception, strerror:
+            import traceback
             traceback.print_exc()
             self.queue.put(strerror)
-        print test_func, "F"
         self.clientTearDown()
-        print test_func, "G"
 
     test_socket.ThreadableTest.clientRun = clientRun
 
 # More error context
-if True: 
+if False: 
     import unittest
     OLDTextTestRunner = unittest.TextTestRunner
 
@@ -88,20 +157,21 @@ if True:
     unittest.TextTestRunner = NEWTextTestRunner
 
 # Remove UDP tests for now.
-for k in test_socket.BasicUDPTest.__dict__.keys():
-    if k.startswith("test"):
-        delattr(test_socket.BasicUDPTest, k)
+if False:
+    for k in test_socket.BasicUDPTest.__dict__.keys():
+        if k.startswith("test"):
+            delattr(test_socket.BasicUDPTest, k)
 
-for k in test_socket.UDPTimeoutTest.__dict__.keys():
-    if k.startswith("test"):
-        delattr(test_socket.UDPTimeoutTest, k)
+    for k in test_socket.UDPTimeoutTest.__dict__.keys():
+        if k.startswith("test"):
+            delattr(test_socket.UDPTimeoutTest, k)
 
 
 die = False
 last_poll_time = time.time()
 
 # Whether to monitor the threads (used by test_socket) in case of deadlock.
-if False:
+if True:
     def thread_name(threadId):
         if threadId == main_thread.ident:
             return "main_thread"
@@ -127,32 +197,47 @@ if False:
                 print "** Printing thread stack traces"
                 dumpstacks()
                 break
+        print "** Printing socket channel stack traces done, exiting"
+        stacklesssocket.dump_socket_stack_traces()
         print "** Printing thread stack traces done, exiting"
         thread.interrupt_main()
         
     traceback_thread = thread.start_new_thread(periodic_traceback, ())
 
+# Narrow down testing scope.
+if False:
+    def test_main():
+        tests = [
+            test_socket.NonBlockingTCPTests,
+        ]
+
+        thread_info = test_socket.test_support.threading_setup()
+        test_socket.test_support.run_unittest(*tests)
+        test_socket.test_support.threading_cleanup(*thread_info)
+else:
+    test_main = test_socket.test_main
+
 #############
 
-def run_tasklet(f, *args, **kwargs):
-    try:
-        f(*args, **kwargs)
-    except Exception:
-        traceback.print_exc()
-
 def run():
-    stackless.tasklet(run_tasklet)(manage_sleeping_tasklets)
-    stackless.tasklet(run_tasklet)(test_socket.test_main)
+    global last_poll_time
+
+    stackless.tasklet(new_tasklet)(manage_sleeping_tasklets)
+    stackless.tasklet(new_tasklet)(test_main)
 
     while len(asyncore.socket_map) or stackless.runcount:
         last_poll_time = time.time()
         try:
-            print "POLL", len(asyncore.socket_map),
+            # print "POLL", len(asyncore.socket_map),
             asyncore.poll(0.05)
-            print "SCHEDULE", stackless.runcount,
+            # print "SCHEDULE", stackless.runcount,
             stackless.schedule()
         except Exception, e:
-            traceback.print_exc()
+            if isinstance(e, ReferenceError):
+                print "run:EXCEPTION", str(e), asyncore.socket_map
+            else:
+                print "run:EXCEPTION", asyncore.socket_map
+                traceback.print_exc()
             sys.exc_clear()
 
 
@@ -161,6 +246,10 @@ try:
 except BaseException:
     print "** Unexpected exit from test execution."
     traceback.print_exc()
+except KeyboardInterrupt:
+    print "** Ctrl-c pressed"
+    dumpstacks()
+    stacklesssocket.dump_socket_stack_traces()
 finally:
     print "** Exit"
     die = True

@@ -23,17 +23,21 @@
 # Possible improvements:
 # - More correct error handling.  When there is an error on a socket found by
 #   poll, there is no idea what it actually is.
-# - Launching each bit of incoming data in its own tasklet on the recvChannel
-#   send is a little over the top.  It should be possible to add it to the
-#   rest of the queued data
 
 # Small parts of this code were contributed back with permission from an
 # internal version of this module in use at CCP Games.
 
 import stackless
-import asyncore, weakref
+import asyncore, weakref, time, select
+
+OPTION_WEAKREF_SOCKETMAP = True
+
+if OPTION_WEAKREF_SOCKETMAP:
+    asyncore.socket_map = weakref.WeakValueDictionary()
+
 import socket as stdsocket # We need the "socket" name for the function we export.
-from errno import EWOULDBLOCK
+from errno import EALREADY, EINPROGRESS, EWOULDBLOCK, ECONNRESET, \
+     ENOTCONN, ESHUTDOWN, EINTR, EISCONN, EBADF, ECONNABORTED
 
 # If we are to masquerade as the socket module, we need to provide the constants.
 if "__all__" in stdsocket.__dict__:
@@ -71,6 +75,7 @@ _fileobject = stdsocket._fileobject
 # to ensure it doesn't start multiple copies of itself unnecessarily.
 #
 
+
 managerRunning = False
 
 def ManageSockets():
@@ -94,6 +99,10 @@ def StartManager():
 _schedule_func = stackless.schedule
 _manage_sockets_func = StartManager
 _sleep_func = None
+_timeout_func = None
+
+def can_timeout():
+    return _sleep_func is not None or _timeout_func is not None
 
 def stacklesssocket_manager(mgr):
     global _manage_sockets_func
@@ -123,21 +132,9 @@ class _socketobject_new(_socketobject_old):
         sock = _fakesocket(sock)
         sock.wasConnected = True
         return _socketobject_new(_sock=sock), addr
-        
+
     accept.__doc__ = _socketobject_old.accept.__doc__
 
-
-def check_still_connected(f):
-    " Decorate socket functions to check they are still connected. "
-    def new_f(self, *args, **kwds):
-        if not self.connected:
-            # The socket was never connected.
-            if not self.wasConnected:
-                raise error(10057, "Socket is not connected")
-            # The socket has been closed already.
-            raise error(EBADF, 'Bad file descriptor')
-        return f(self, *args, **kwds)
-    return new_f
 
 
 def install():
@@ -154,8 +151,10 @@ def uninstall():
 class _fakesocket(asyncore.dispatcher):
     connectChannel = None
     acceptChannel = None
-    recvChannel = None
     wasConnected = False
+
+    _timeout = None
+    _blocking = True
 
     def __init__(self, realSocket):
         # This is worth doing.  I was passing in an invalid socket which
@@ -165,34 +164,42 @@ class _fakesocket(asyncore.dispatcher):
 
         # This will register the real socket in the internal socket map.
         asyncore.dispatcher.__init__(self, realSocket)
-        self.socket = realSocket
 
-        self.recvChannel = stackless.channel()
-        self.readString = ''
-        self.readIdx = 0
-
-        self.sendChunks = []
+        self.readQueue = []
+        self.writeQueue = []
         self.sendToBuffers = []
-        
-        self._timeout = None
-        self._timeout_uid = 0
+
+        if can_timeout():
+            self._timeout = stdsocket.getdefaulttimeout()
 
     def receive_with_timeout(self, channel):
         if self._timeout is not None:
-            self._timeout_uid += 1
-            t = stackless.tasklet(self._manage_receive_with_timeout)(self._timeout_uid, channel)
-            try:
-                return channel.receive()
-            finally:
-                t.kill()
-        return channel.receive()
+            # Start a timing out process.
+            # a) Engage a pre-existing external tasklet to send an exception on our channel if it has a receiver, if we are still there when it times out.
+            # b) Launch a tasklet that does a sleep, and sends an exception if we are still waiting, when it is awoken.
+            # Block waiting for a send.
 
-    def _manage_receive_with_timeout(self, timeout_uid, channel):
-        if self._timeout_uid != timeout_uid:
-            return
-        _sleep_func(self._timeout)
-        if self._timeout_uid == timeout_uid:
-            channel.send_exception(timeout, "timed out")
+            if _timeout_func is not None:
+                # You will want to use this if you are using sockets in a different thread from your sleep functionality.
+                _timeout_func(self._timeout, channel, (timeout, "timed out"))
+            elif _sleep_func is not None:
+                stackless.tasklet(self._manage_receive_with_timeout)(channel)
+            else:
+                raise NotImplementedError("should not be here")
+
+            try:
+                ret = channel.receive()
+            except BaseException, e:
+                raise e
+            return ret
+        else:
+            return channel.receive()
+
+    def _manage_receive_with_timeout(self, channel):
+        if channel.balance < 0:            
+            _sleep_func(self._timeout)
+            if channel.balance < 0:
+                channel.send_exception(timeout, "timed out")
 
     def __del__(self):
         # There are no more users (sockets or files) of this fake socket, we
@@ -207,17 +214,34 @@ class _fakesocket(asyncore.dispatcher):
             raise AttributeError("socket attribute unset on '"+ attr +"' lookup")
         return getattr(self.socket, attr)
 
-    def add_channel(self, map=None):
-        if map is None:
-            map = self._map
-        map[self._fileno] = weakref.proxy(self)
+    if not OPTION_WEAKREF_SOCKETMAP:
+        def add_channel(self, map=None):
+            if map is None:
+                map = self._map
+            map[self._fileno] = weakref.proxy(self)
+
+    def readable(self):
+        if self.socket.type == SOCK_DGRAM:
+            return True
+        if len(self.readQueue):
+            return True
+        if self.acceptChannel is not None and self.acceptChannel.balance < 0:
+            return True
+        if self.connectChannel is not None and self.connectChannel.balance < 0:
+            return True
+        return False
 
     def writable(self):
         if self.socket.type != SOCK_DGRAM and not self.connected:
             return True
-        return len(self.sendChunks) or len(self.sendToBuffers)
+        if len(self.writeQueue):
+            return True
+        if len(self.sendToBuffers):
+            return True
+        return False
 
     def accept(self):
+        self._ensure_non_blocking_read()
         if not self.acceptChannel:
             self.acceptChannel = stackless.channel()
         return self.receive_with_timeout(self.acceptChannel)
@@ -234,21 +258,23 @@ class _fakesocket(asyncore.dispatcher):
                 self.connectChannel.preference = 1
             self.receive_with_timeout(self.connectChannel)
 
-    @check_still_connected
-    def send(self, data, flags=0):
-        self.sendChunks.append(data)
-        _schedule_func()
-        return len(data)
+    def _send(self, data, flags):
+        self._ensure_connected()
 
-    @check_still_connected
+        channel = stackless.channel()
+        channel.preference = 1 # Prefer the sender.
+        self.writeQueue.append((flags, data, channel))
+        return self.receive_with_timeout(channel)
+
+    def send(self, data, flags=0):
+        return self._send(data, flags)
+
     def sendall(self, data, flags=0):
-        # WARNING: this will busy wait until all data is sent
-        # It should be possible to do away with the busy wait with
-        # the use of a channel.
-        self.sendChunks.append(data)
-        while self.sendChunks:
-            _schedule_func()
-        return len(data)
+        while len(data):
+            nbytes = self._send(data, flags)
+            if nbytes == 0:
+                raise Exception("completely unexpected situation, no data sent")
+            data = data[nbytes:]
 
     def sendto(self, sendData, sendArg1=None, sendArg2=None):
         # sendto(data, address)
@@ -271,85 +297,94 @@ class _fakesocket(asyncore.dispatcher):
             self.sendToBuffers.append((sendData, sendAddress, waitChannel, 0))
         return self.receive_with_timeout(waitChannel)
 
-    # Read at most byteCount bytes.
-    def recv(self, byteCount, flags=0):        
-        # recv() must not concatenate two or more data fragments sent with
-        # send() on the remote side. Single fragment sent with single send()
-        # call should be split into strings of length less than or equal
-        # to 'byteCount', and returned by one or more recv() calls.
+    def _recv(self, methodName, args):
+        self._ensure_non_blocking_read()
 
-        remainingBytes = self.readIdx != len(self.readString)
-        # TODO: Verify this connectivity behaviour.
+        if self._fileno is None:
+            return ""
+        channel = stackless.channel()
+        channel.preference = 1 # Prefer the sender.
+        self.readQueue.append((channel, methodName, args))
+        return self.receive_with_timeout(channel)
 
+    def recv(self, *args):
         if not self.connected:
             # Sockets which have never been connected do this.
             if not self.wasConnected:
                 raise error(10057, 'Socket is not connected')
 
-            # Sockets which were connected, but no longer are, use
-            # up the remaining input.  Observed this with urllib.urlopen
-            # where it closes the socket and then allows the caller to
-            # use a file to access the body of the web page.
-        elif not remainingBytes:            
-            self.readString = self.receive_with_timeout(self.recvChannel)
-            self.readIdx = 0
-            remainingBytes = len(self.readString)
+        return self._recv("recv", args)
 
-        if byteCount == 1 and remainingBytes:
-            ret = self.readString[self.readIdx]
-            self.readIdx += 1
-        elif self.readIdx == 0 and byteCount >= len(self.readString):
-            ret = self.readString
-            self.readString = ""
-        else:
-            idx = self.readIdx + byteCount
-            ret = self.readString[self.readIdx:idx]
-            self.readString = self.readString[idx:]
-            self.readIdx = 0
+    def recv_into(self, *args):
+        if not self.connected:
+            # Sockets which have never been connected do this.
+            if not self.wasConnected:
+                raise error(10057, 'Socket is not connected')
 
-        # ret will be '' when EOF.
-        return ret
+        return self._recv("recv_into", args)
 
-    def recvfrom(self, byteCount, flags=0):
-        if self.socket.type == SOCK_STREAM:
-            return self.recv(byteCount), None
+    def recvfrom(self, *args):
+        return self._recv("recvfrom", args)
 
-        # recvfrom() must not concatenate two or more packets.
-        # Each call should return the first 'byteCount' part of the packet.
-        data, address = self.receive_with_timeout(self.recvChannel)
-        return data[:byteCount], address
+    def recvfrom_into(self, *args):
+        return self._recv("recvfrom_into", args)
 
     def close(self):
+        if self._fileno is None:
+            return
+
         asyncore.dispatcher.close(self)
 
         self.connected = False
         self.accepting = False
-        self.sendChunks = None  # breaks the loop in sendall
+        self.writeQueue = []
 
         # Clear out all the channels with relevant errors.
         while self.acceptChannel and self.acceptChannel.balance < 0:
             self.acceptChannel.send_exception(error, 9, 'Bad file descriptor')
         while self.connectChannel and self.connectChannel.balance < 0:
             self.connectChannel.send_exception(error, 10061, 'Connection refused')
-        while self.recvChannel and self.recvChannel.balance < 0:
-            # The closing of a socket is indicted by receiving nothing.  The
-            # exception would have been sent if the server was killed, rather
-            # than closed down gracefully.
-            self.recvChannel.send("")
-            #self.recvChannel.send_exception(error, 10054, 'Connection reset by peer')
+        self._clear_read_queue()
+
+    def _clear_read_queue(self, *args):
+        for t in self.readQueue:
+            if t[0].balance < 0:
+                if len(args):
+                    t[0].send_exception(*args)
+                else:
+                    t[0].send("")
+        self.readQueue = []        
 
     # asyncore doesn't support this.  Why not?
     def fileno(self):
         return self.socket.fileno()
 
-    def setblocking(self, flag):
-        if not flag:
-            raise RuntimeError("This is a stackless socket - needs better handling")
+    def _is_non_blocking(self):
+        return not self._blocking or self._timeout == 0.0
+
+    def _ensure_non_blocking_read(self):
+        if self._is_non_blocking():
+            # Ensure there is something on the socket, before fetching it.  Otherwise, error complaining.
+            r, w, e = select.select([ self ], [], [], 0.0)
+            if not r:
+                raise stdsocket.error(EWOULDBLOCK, "The socket operation could not complete without blocking")
+
+    def _ensure_connected(self):
+        if not self.connected:
+            # The socket was never connected.
+            if not self.wasConnected:
+                raise error(10057, "Socket is not connected")
+            # The socket has been closed already.
+            raise error(EBADF, 'Bad file descriptor')
+
+    def setblocking(self, flag):    
+        self._blocking = flag
+
+    def gettimeout(self):
+        return self._timeout
 
     def settimeout(self, value):
-        if not value:
-            raise RuntimeError("This is a stackless socket - non-blocking handling not supported")
-        if value and _sleep_func is None:
+        if value and not can_timeout():
             raise RuntimeError("This is a stackless socket - to have timeout support you need to provide a sleep function")
         self._timeout = value
 
@@ -379,57 +414,57 @@ class _fakesocket(asyncore.dispatcher):
     # Some error, just close the channel and let that raise errors to
     # blocked calls.
     def handle_expt(self):
+        if False:
+            import traceback
+            print "handle_expt: START"
+            traceback.print_exc()
+            print "handle_expt: END"
         self.close()
 
     def handle_read(self):
-        """
-        Receive data until we are told it is a blocking operation.  But limit
-        how much we receive, because in the case of large amounts of data,
-        this may loop for prolonged amounts of time receiving.
-        """
-        chunks = []
-        recvdSize = 0
-        chunkSize = 1024 * 1024
-        try:
-            while recvdSize < chunkSize:
-                recvSize = chunkSize -  recvdSize
-                if self.socket.type == SOCK_DGRAM:
-                    ret = self.socket.recvfrom(recvSize)
-                else:
-                    ret = asyncore.dispatcher.recv(self, recvSize)
-                    # Not sure this is correct, but it seems to give the
-                    # right behaviour.  Namely removing the socket from
-                    # asyncore.
-                    if not ret:
-                        self.close()
-                        break
-                recvdSize += len(ret)
-                chunks.append(ret)
-        except stdsocket.error, err:
-            if err[0] != EWOULDBLOCK:
-                # If there's a read error assume the connection is
-                # broken and drop any pending output
-                if self.sendChunks:
-                    self.sendChunks = []
-                self.recvChannel.send_exception(stdsocket.error, err)
-                return
+        if not len(self.readQueue):
+            return
 
-        if recvdSize > 0:
-            if len(chunks) == 1:
-                stackless.tasklet(self.recvChannel.send)(ret)
-            else:
-                stackless.tasklet(self.recvChannel.send)("".join(chunks))
+        channel, methodName, args = self.readQueue[0]
+
+        try:
+            result = getattr(self.socket, methodName)(*args)
+        except Exception, e:
+            # winsock sometimes throws ENOTCONN
+            if isinstance(e, stdsocket.error) and e.args[0] in [ECONNRESET, ENOTCONN, ESHUTDOWN, ECONNABORTED]:
+                self.handle_close()
+                result = ''
+            elif channel.balance < 0:
+                channel.send_exception(e.__class__, *e.args)
+
+        if channel.balance < 0:
+            channel.send(result)
+
+        if len(self.readQueue) and self.readQueue[0][0] is channel:
+            del self.readQueue[0]
 
     def handle_write(self):
-        if len(self.sendChunks):
-            firstChunk = self.sendChunks[0]
-            sentBytes = asyncore.dispatcher.send(self, firstChunk)
-            if not self.sendChunks:
-                return
-            if sentBytes == len(firstChunk):
-                del self.sendChunks[0]
-            else:
-                self.sendChunks[0] = firstChunk[sentBytes:]
+        if len(self.writeQueue):
+            flags, data, channel = self.writeQueue[0]
+            del self.writeQueue[0]
+
+            # asyncore does not expose sending the flags.
+            def asyncore_send(self, data, flags=0):
+                try:
+                    result = self.socket.send(data, flags)
+                    return result
+                except socket.error, why:
+                    if why.args[0] == EWOULDBLOCK:
+                        return 0
+                    elif why.args[0] in (ECONNRESET, ENOTCONN, ESHUTDOWN, ECONNABORTED):
+                        self.handle_close()
+                        return 0
+                    else:
+                        raise
+
+            nbytes = asyncore_send(self, data, flags)
+            if channel.balance < 0:
+                channel.send(nbytes)
         elif len(self.sendToBuffers):
             data, address, channel, oldSentBytes = self.sendToBuffers[0]
             sentBytes = self.socket.sendto(data, address)
@@ -439,6 +474,20 @@ class _fakesocket(asyncore.dispatcher):
             else:
                 del self.sendToBuffers[0]
                 stackless.tasklet(channel.send)(totalSentBytes)
+
+
+if False:
+    def dump_socket_stack_traces():
+        import traceback
+        for skt in asyncore.socket_map.values():
+            for k, v in skt.__dict__.items():
+                if isinstance(v, stackless.channel) and v.queue:
+                    i = 0
+                    current = v.queue
+                    while i == 0 or v.queue is not current:
+                        print "%s.%s.%s" % (skt, k, i)
+                        traceback.print_stack(t)
+                        i += 1
 
 
 if __name__ == '__main__':
@@ -528,8 +577,6 @@ if __name__ == '__main__':
 
     def TestMonkeyPatchUrllib(uri):
         # replace the system socket with this module
-        #oldSocket = sys.modules["socket"]
-        #sys.modules["socket"] = __import__(__name__)
         install()
         try:
             import urllib  # must occur after monkey-patching!
@@ -542,13 +589,10 @@ if __name__ == '__main__':
             else:
                 raise AssertionError("no text received?")
         finally:
-            #sys.modules["socket"] = oldSocket
             uninstall()
 
     def TestMonkeyPatchUDP(address):
         # replace the system socket with this module
-        #oldSocket = sys.modules["socket"]
-        #sys.modules["socket"] = __import__(__name__)
         install()
         try:
             def UDPServer(address):
@@ -562,10 +606,11 @@ if __name__ == '__main__':
                 # which tests this module against the normal socket
                 # module.
                 print "waiting to receive"
-                data, address = listenSocket.recvfrom(256)
-                print "received", data, len(data)
-                if len(data) != 256:
-                    raise StandardError("Unexpected UDP packet size")
+                rdata = ""
+                while len(rdata) < 512:
+                    data, address = listenSocket.recvfrom(4096)
+                    print "received", data, len(data)
+                    rdata += data
 
             def UDPClient(address):
                 clientSocket = stdsocket.socket(AF_INET, SOCK_DGRAM)
@@ -578,7 +623,6 @@ if __name__ == '__main__':
             stackless.tasklet(UDPClient)(address)
             stackless.run()
         finally:
-            #sys.modules["socket"] = oldSocket
             uninstall()
 
     if len(sys.argv) == 2:
