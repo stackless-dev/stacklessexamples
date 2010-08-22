@@ -1,39 +1,41 @@
 #
-# Stackless compatible socket module:
+# Stackless compatible socket module.
 #
 # Author: Richard Tew <richard.m.tew@gmail.com>
 #
-# This code was written to serve as an example of Stackless Python usage.
 # Feel free to email me with any questions, comments, or suggestions for
 # improvement.
 #
-# This wraps the asyncore module and the dispatcher class it provides in order
-# write a socket module replacement that uses channels to allow calls to it to
-# block until a delayed event occurs.
+# Python standard library socket unit test state:
+# - 2.5: Bad.
+# - 2.6: Excellent (two UDP failures).
+# - 2.7: Excellent (two UDP failures).
 #
-# Not all aspects of the socket module are provided by this file.  Examples of
-# it in use can be seen at the bottom of this file.
+# This module is otherwise known to generally work for 2.5, 2.6 and 2.7.
 #
-# NOTE: Versions of the asyncore module from Python 2.4 or later include bug
-#       fixes and earlier versions will not guarantee correct behaviour.
-#       Specifically, it monitors for errors on sockets where the version in
-#       Python 2.3.3 does not.
-#
-
-# Possible improvements:
-# - More correct error handling.  When there is an error on a socket found by
-#   poll, there is no idea what it actually is.
-
 # Small parts of this code were contributed back with permission from an
 # internal version of this module in use at CCP Games.
 
 import stackless
-import asyncore, weakref, time, select
+import asyncore, weakref, time, select, types
 
-OPTION_WEAKREF_SOCKETMAP = True
+# If you pump the scheduler and wish to prevent the scheduler from staying
+# non-empty for prolonged periods of time, If you do not pump the scheduler,
+# you may however wish to prevent calls to poll() from running too long.
+# Doing so gives all managed sockets a fairer chance at being read from,
+# rather than paying prolonged attention to sockets with more incoming data.
+#
+# These values govern how long a poll() call spends at a given attempt
+# of reading the data present on a given socket.
+#
+VALUE_MAX_NONBLOCKINGREAD_SIZE = 1000000
+VALUE_MAX_NONBLOCKINGREAD_CALLS = 100
 
-if OPTION_WEAKREF_SOCKETMAP:
-    asyncore.socket_map = weakref.WeakValueDictionary()
+## Monkey-patching support..
+
+# We need this so that sockets are cleared out when they are no longer in use.
+# In fact, it is essential to correct operation of this code.
+asyncore.socket_map = weakref.WeakValueDictionary()
 
 import socket as stdsocket # We need the "socket" name for the function we export.
 from errno import EALREADY, EINPROGRESS, EWOULDBLOCK, ECONNRESET, \
@@ -75,7 +77,6 @@ _fileobject = stdsocket._fileobject
 # to ensure it doesn't start multiple copies of itself unnecessarily.
 #
 
-
 managerRunning = False
 
 def ManageSockets():
@@ -84,6 +85,7 @@ def ManageSockets():
     try:
         while len(asyncore.socket_map):
             # Check the sockets for activity.
+            #print "POLL"
             asyncore.poll(0.05)
             # Yield to give other tasklets a chance to be scheduled.
             _schedule_func()
@@ -156,6 +158,11 @@ class _fakesocket(asyncore.dispatcher):
     _timeout = None
     _blocking = True
 
+    lastReadChannelRef = None
+    lastReadArguments = None
+    lastReadTally = 0
+    lastReadCalls = 0
+
     def __init__(self, realSocket):
         # This is worth doing.  I was passing in an invalid socket which
         # was an instance of _fakesocket and it was causing tasklet death.
@@ -213,12 +220,6 @@ class _fakesocket(asyncore.dispatcher):
         if not hasattr(self, "socket"):
             raise AttributeError("socket attribute unset on '"+ attr +"' lookup")
         return getattr(self.socket, attr)
-
-    if not OPTION_WEAKREF_SOCKETMAP:
-        def add_channel(self, map=None):
-            if map is None:
-                map = self._map
-            map[self._fileno] = weakref.proxy(self)
 
     def readable(self):
         if self.socket.type == SOCK_DGRAM:
@@ -297,15 +298,64 @@ class _fakesocket(asyncore.dispatcher):
             self.sendToBuffers.append((sendData, sendAddress, waitChannel, 0))
         return self.receive_with_timeout(waitChannel)
 
-    def _recv(self, methodName, args):
+    def _recv(self, methodName, args, sizeIdx=0):
         self._ensure_non_blocking_read()
 
         if self._fileno is None:
             return ""
-        channel = stackless.channel()
-        channel.preference = 1 # Prefer the sender.
-        self.readQueue.append((channel, methodName, args))
-        return self.receive_with_timeout(channel)
+        
+        if len(args) >= sizeIdx+1:
+            generalArgs = list(args)
+            generalArgs[sizeIdx] = 0
+            generalArgs = tuple(generalArgs)
+        else:
+            generalArgs = args
+        channelKey = methodName, generalArgs
+        #print self._fileno, "_recv:---ENTER---", channelKey
+        while True:
+            channel = None
+            if self.lastReadChannelRef is not None and self.lastReadTally < VALUE_MAX_NONBLOCKINGREAD_SIZE and self.lastReadCalls < VALUE_MAX_NONBLOCKINGREAD_CALLS:
+                if channelKey == self.lastReadArguments:
+                    channel = self.lastReadChannelRef()
+                self.lastReadChannelRef = None
+            #elif self.lastReadTally >= VALUE_MAX_NONBLOCKINGREAD_SIZE or self.lastReadCalls >= VALUE_MAX_NONBLOCKINGREAD_CALLS:
+                #print "_recv:FORCE-CHANNEL-CHANGE %d %d" % (self.lastReadTally, self.lastReadCalls)
+
+            if channel is None:
+                channel = stackless.channel()
+                channel.preference = -1 # Prefer the receiver.
+                self.lastReadTally = self.lastReadCalls = 0
+                #print self._fileno, "_recv:NEW-CHANNEL", id(channel)
+                self.readQueue.append([ channel, methodName, args ])
+            else:
+                self.readQueue[0][2] = args
+                #print self._fileno, "_recv:RECYCLE-CHANNEL", id(channel), self.lastReadTally
+
+            try:
+                ret = self.receive_with_timeout(channel)
+            except stdsocket.error, e:
+                if isinstance(e, stdsocket.error) and e.args[0] == EWOULDBLOCK:
+                    #print self._fileno, "_recv:BLOCK-RETRY", id(channel), "-" * 30
+                    continue
+                else:
+                    raise
+            break
+
+        self.lastReadChannelRef = weakref.ref(channel)
+        self.lastReadArguments = channelKey
+        if isinstance(ret, types.StringTypes):
+            self.lastReadTally += len(ret)
+        elif methodName == "recvfrom":
+            self.lastReadTally += len(ret[0])
+        elif methodName == "recvfrom_into":
+            self.lastReadTally += ret[0]
+        else:
+            self.lastReadTally += ret            
+        self.lastReadCalls += 1
+
+        #print self._fileno, "_recv:---EXIT---", channelKey, len(ret), self.lastReadChannelRef()
+
+        return ret
 
     def recv(self, *args):
         if not self.connected:
@@ -321,13 +371,13 @@ class _fakesocket(asyncore.dispatcher):
             if not self.wasConnected:
                 raise error(10057, 'Socket is not connected')
 
-        return self._recv("recv_into", args)
+        return self._recv("recv_into", args, sizeIdx=1)
 
     def recvfrom(self, *args):
         return self._recv("recvfrom", args)
 
     def recvfrom_into(self, *args):
-        return self._recv("recvfrom_into", args)
+        return self._recv("recvfrom_into", args, sizeIdx=1)
 
     def close(self):
         if self._fileno is None:
@@ -422,26 +472,64 @@ class _fakesocket(asyncore.dispatcher):
         self.close()
 
     def handle_read(self):
+        """
+            This will be called once per-poll call per socket with data in its buffer to be read.
+            
+            If you call poll once every 30th of a second, then you are going to be rate limited
+            in terms of how fast you can read incoming data by the packet size they arrive in.
+            In order to deal with the worst case scenario, advantage is taken of how scheduling
+            works in order to keep reading until there is no more data left to read.
+            
+            1.  This function is called indicating data is present to read.
+            2.  The desired amount is read and a send call is made on the channel with it.
+            3.  The function is blocked on that action and the tasklet it is running in is reinserted into the scheduler.
+            4.  The tasklet that made the read related socket call is awakened with the given data.
+            5.  It returns the data to the function that made that call.
+            6.  The function that made the call makes another read related socket call.
+                a) If the call is similar enough to the last call, then the previous channel is retrieved.
+                b) Otherwise, a new channel is created.
+            7.  The tasklet that is making the read related socket call is blocked on the channel.
+            8.  This tasklet that was blocked sending gets scheduled again.
+                a) If there is a tasklet blocked on the channel that it was using, then goto 2.
+                b) Otherwise, the function exits.
+
+            Note that if this function loops indefinitely, and the scheduler is pumped rather than
+            continuously run, the pumping application will stay in its pump call for a prolonged
+            period of time potentially starving the rest of the application for CPU time.
+            
+            An attempt is made in _recv to limit the amount of data read in this manner to a fixed
+            amount and it lets this function exit if that amount is exceeded.  However, this it is
+            up to the user of Stackless to understand how their application schedules and blocks,
+            and there are situations where small reads may still effectively loop indefinitely.            
+        """
+    
         if not len(self.readQueue):
             return
 
         channel, methodName, args = self.readQueue[0]
+        #print self._fileno, "handle_read:---ENTER---", id(channel)
+        while channel.balance < 0:
+            args = self.readQueue[0][2]
+            #print self._fileno, "handle_read:CALL", id(channel), args
+            try:
+                result = getattr(self.socket, methodName)(*args)
+                #print self._fileno, "handle_read:RESULT", id(channel), len(result)
+            except Exception, e:
+                # winsock sometimes throws ENOTCONN
+                #print self._fileno, "handle_read:EXCEPTION", id(channel), len(result)
+                if isinstance(e, stdsocket.error) and e.args[0] in [ECONNRESET, ENOTCONN, ESHUTDOWN, ECONNABORTED]:
+                    self.handle_close()
+                    result = ''
+                elif channel.balance < 0:
+                    channel.send_exception(e.__class__, *e.args)
 
-        try:
-            result = getattr(self.socket, methodName)(*args)
-        except Exception, e:
-            # winsock sometimes throws ENOTCONN
-            if isinstance(e, stdsocket.error) and e.args[0] in [ECONNRESET, ENOTCONN, ESHUTDOWN, ECONNABORTED]:
-                self.handle_close()
-                result = ''
-            elif channel.balance < 0:
-                channel.send_exception(e.__class__, *e.args)
-
-        if channel.balance < 0:
-            channel.send(result)
+            if channel.balance < 0:
+                #print self._fileno, "handle_read:RETURN-RESULT", id(channel), len(result)
+                channel.send(result)
 
         if len(self.readQueue) and self.readQueue[0][0] is channel:
             del self.readQueue[0]
+        #print self._fileno, "handle_read:---EXIT---", id(channel)
 
     def handle_write(self):
         if len(self.writeQueue):
