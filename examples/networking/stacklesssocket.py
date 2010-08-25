@@ -77,7 +77,10 @@ _fileobject = stdsocket._fileobject
 # to ensure it doesn't start multiple copies of itself unnecessarily.
 #
 
+# By Nike: Added poll_interval on install to have it configurable from outside,
+
 managerRunning = False
+poll_interval = 0.05
 
 def ManageSockets():
     global managerRunning
@@ -86,7 +89,7 @@ def ManageSockets():
         while len(asyncore.socket_map):
             # Check the sockets for activity.
             #print "POLL"
-            asyncore.poll(0.05)
+            asyncore.poll(poll_interval)
             # Yield to give other tasklets a chance to be scheduled.
             _schedule_func()
     finally:
@@ -139,11 +142,14 @@ class _socketobject_new(_socketobject_old):
 
 
 
-def install():
+def install(pi=None):
+    global poll_interval    
     if stdsocket._realsocket is socket:
         raise StandardError("Still installed")
     stdsocket._realsocket = socket
     stdsocket.socket = stdsocket.SocketType = stdsocket._socketobject = _socketobject_new
+    if pi is not None:
+        poll_interval = pi
 
 def uninstall():
     stdsocket._realsocket = _realsocket_old
@@ -449,8 +455,11 @@ class _fakesocket(asyncore.dispatcher):
     # Inform the blocked connect call that the connection has been made.
     def handle_connect(self):
         if self.socket.type != SOCK_DGRAM:
-            self.wasConnected = True
-            self.connectChannel.send(None)
+            if self.connectChannel and self.connectChannel.balance < 0:
+                self.wasConnected = True
+                self.connectChannel.send(None)
+            else:
+                self.close()
 
     # Asyncore says its done but self.readBuffer may be non-empty
     # so can't close yet.  Do nothing and let 'recv' trigger the close.
@@ -469,6 +478,9 @@ class _fakesocket(asyncore.dispatcher):
             print "handle_expt: START"
             traceback.print_exc()
             print "handle_expt: END"
+        self.close()
+
+    def handle_error(self):
         self.close()
 
     def handle_read(self):
