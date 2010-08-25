@@ -246,7 +246,7 @@ def Run():
     This function will exit when there are no remaining tasklets to run,
     whether being nice or sleeping.
     '''
-    while yieldChannel.balance or len(sleepingTasklets) or stackless.runcount > 1:
+    while yieldChannel.balance or len(sleepingTasklets)>1 or stackless.runcount > 1:
         RunNiceTasklets()
         t = stackless.run(500000)
         if t is not None:
