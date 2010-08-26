@@ -6,7 +6,22 @@
 # Feel free to email me with any questions, comments, or suggestions for
 # improvement.
 #
+# Remaining work:
+#
+# = Asyncore does not add that much to this module.  In fact, its
+#   limitations and differences between implementations in different Python
+#   versions just complicate things.
+# = Select on Windows only handles 512 sockets at a time.  So if there
+#   are more sockets than that, then they need to be separated and
+#   batched around this limitation.
+# = It should be possible to have this wrap different mechanisms of
+#   asynchronous IO, from select to IO completion ports.
+# = UDP support is mostly there due to the new hands off approach, but
+#   there are a few spots like handle_write and timeout handling, which need
+#   to be dealt with.
+#
 # Python standard library socket unit test state:
+#
 # - 2.5: Bad.
 # - 2.6: Excellent (two UDP failures).
 # - 2.7: Excellent (two UDP failures).
@@ -15,6 +30,7 @@
 #
 # Small parts of this code were contributed back with permission from an
 # internal version of this module in use at CCP Games.
+#
 
 import stackless
 import asyncore, weakref, time, select, types
@@ -227,6 +243,8 @@ class _fakesocket(asyncore.dispatcher):
             raise AttributeError("socket attribute unset on '"+ attr +"' lookup")
         return getattr(self.socket, attr)
 
+    ## Asyncore potential activity indicators.
+
     def readable(self):
         if self.socket.type == SOCK_DGRAM:
             return True
@@ -247,6 +265,8 @@ class _fakesocket(asyncore.dispatcher):
             return True
         return False
 
+    ## Overriden socket methods.
+
     def accept(self):
         self._ensure_non_blocking_read()
         if not self.acceptChannel:
@@ -254,6 +274,11 @@ class _fakesocket(asyncore.dispatcher):
         return self.receive_with_timeout(self.acceptChannel)
 
     def connect(self, address):
+        """
+        If a timeout is set for the connection attempt, and the timeout occurs
+        then it is the responsibility of the user to close the socket, should
+        they not wish the connection to potentially establish anyway.
+        """
         asyncore.dispatcher.connect(self, address)
         
         # UDP sockets do not connect.
@@ -458,8 +483,6 @@ class _fakesocket(asyncore.dispatcher):
             if self.connectChannel and self.connectChannel.balance < 0:
                 self.wasConnected = True
                 self.connectChannel.send(None)
-            else:
-                self.close()
 
     # Asyncore says its done but self.readBuffer may be non-empty
     # so can't close yet.  Do nothing and let 'recv' trigger the close.
@@ -544,6 +567,9 @@ class _fakesocket(asyncore.dispatcher):
         #print self._fileno, "handle_read:---EXIT---", id(channel)
 
     def handle_write(self):
+        """
+        This function still needs work WRT UDP.
+        """
         if len(self.writeQueue):
             flags, data, channel = self.writeQueue[0]
             del self.writeQueue[0]
