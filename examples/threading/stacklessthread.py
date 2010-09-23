@@ -36,10 +36,12 @@ def install():
     # thread.start_new_thread = start_new_thread
     threading._allocate_lock = allocate_lock
     time.sleep = _sleep
+    threading._sleep = _sleep
     select.select = _select
 
 def uninstall():
     threading._allocate_lock = stdallocate_lock
+    threading._sleep = stdsleep
     thread.allocate_lock = thread.allocate = stdallocate_lock
     # thread.start_new_thread = stdstart_new_thread
     time.sleep = stdsleep
@@ -61,16 +63,60 @@ def _sleep(seconds):
 
 ## select module functions
 
-def _wait_for_select(args, kwargs, channel):
-    ret = stdselect(*args, **kwargs)
-    channel.send(ret)
+def _isolate_bad_fd(idx, blist):
+    args = [ [], [], [], 0 ]
+    args[idx] = blist
+    try:
+        stdselect(*args)
+        return False
+    except select.error:
+        return True
 
-def _select(*args, **kwargs):
+def _wait_for_select(channel, rlist, wlist, xlist, timeout):
+    attemptsLeft = 3
+    errorContext = "Broken"
+    while attemptsLeft > 0:
+        attemptsLeft -= 1
+
+        try:
+            ret = stdselect(rlist, wlist, xlist, timeout)
+            channel.send(ret)
+            return
+        except select.error, e:
+            errorContext = e.args
+            sys.exc_clear()
+
+            checklist = [ rlist, wlist, xlist ]
+            for idx, clist in enumerate(checklist):
+                clist2 = []
+                if _isolate_bad_fd(idx, clist):
+                    for fd in clist:
+                        if not _isolate_bad_fd(idx, [ fd ]):
+                            clist2.append(fd)
+                if clist != clist2:
+                    checklist[idx] = clist2
+
+            oldChecklist = [ rlist, wlist, xlist ]
+            if oldChecklist != checklist:
+                print attemptsLeft, "FIXED", idx, "FROM", oldChecklist, "TO", checklist
+
+            # CASE 1: Nothing valid left.
+            if checklist == [ [], [], [] ]:
+                channel.send(checklist)
+                return
+
+            # CASE 2: Something left, pass it through again.
+            rlist, wlist, xlist = checklist
+
+    print str(("SELECT FAILED (if you see this, copy paste it to richard)", rlist, wlist, xlist))
+    channel.send_exception(select.error, errorContext)
+
+def _select(rlist, wlist, xlist, timeout=None):
     if stackless.current.thread_id == main_thread_id:
         channel = stackless.channel()
-        thread_id = stdstart_new_thread(_wait_for_select, (args, kwargs, channel))
+        thread_id = stdstart_new_thread(_wait_for_select, (channel, rlist, wlist, xlist, timeout))
         return channel.receive()
-    return stdselect(*args, **kwargs)
+    return stdselect(rlist, wlist, xlist, timeout)
     
 
 ## thread module functions
@@ -103,6 +149,12 @@ class _Lock(object):
 
     def __getattr__(self, name):
         return getattr(self.stdlock, name)
+
+    def __enter__(self):
+        return self.acquire()
+
+    def __exit__(self, *args):
+        self.stdlock.release()
 
 def allocate_lock():
     return _Lock()

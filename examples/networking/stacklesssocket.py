@@ -248,6 +248,8 @@ class _fakesocket(asyncore.dispatcher):
     def readable(self):
         if self.socket.type == SOCK_DGRAM:
             return True
+        #if not hasattr(self, "readQueue"):
+        #    print self
         if len(self.readQueue):
             return True
         if self.acceptChannel is not None and self.acceptChannel.balance < 0:
@@ -389,18 +391,18 @@ class _fakesocket(asyncore.dispatcher):
         return ret
 
     def recv(self, *args):
-        if not self.connected:
-            # Sockets which have never been connected do this.
-            if not self.wasConnected:
-                raise error(10057, 'Socket is not connected')
+        #if not self.connected:
+        #    # Sockets which have never been connected do this.
+        #    if not self.wasConnected:
+        #        raise error(10057, 'Socket is not connected')
 
         return self._recv("recv", args)
 
     def recv_into(self, *args):
-        if not self.connected:
-            # Sockets which have never been connected do this.
-            if not self.wasConnected:
-                raise error(10057, 'Socket is not connected')
+        #if not self.connected:
+        #    # Sockets which have never been connected do this.
+        #    if not self.wasConnected:
+        #        raise error(10057, 'Socket is not connected')
 
         return self._recv("recv_into", args, sizeIdx=1)
 

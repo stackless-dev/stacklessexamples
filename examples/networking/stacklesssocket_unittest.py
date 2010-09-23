@@ -60,22 +60,22 @@ def timeout_worker(workerChannel):
         #print "timeout_worker:DONE", secondsToWait, args
 
 # Start up a nominal amount of worker tasklets.    
-for i in range(10):
+for i in range(50):
     stackless.tasklet(new_tasklet)(timeout_worker, stackless.channel())
 
 def timeout_wrap_sleep(seconds, timeoutChannel, args):
-    #print "timeout_wrap_sleep:ENTER balance=%d" % channel.balance
+    #print "timeout_wrap_sleep:ENTER balance=%d" % timeoutChannel.balance
     if timeoutChannel.balance < 0:
-        #print "timeout_wrap_sleep:SLEEP balance=%d" % channel.balance
+        #print "timeout_wrap_sleep:SLEEP balance=%d" % timeoutChannel.balance
         sleep(seconds)
-        #print "timeout_wrap_sleep:SLEPT balance=%d" % channel.balance
+        #print "timeout_wrap_sleep:SLEPT balance=%d" % timeoutChannel.balance
         if timeoutChannel.balance < 0:
-            #print "timeout_wrap_sleep:WAKEUP balance=%d" % channel.balance
+            #print "timeout_wrap_sleep:WAKEUP balance=%d" % timeoutChannel.balance
             if args is not None:
                 timeoutChannel.send_exception(*args)
             else:
                 timeoutChannel.send(None)
-    #print "timeout_wrap_sleep:EXIT balance=%d" % channel.balance
+    #print "timeout_wrap_sleep:EXIT balance=%d" % timeoutChannel.balance
 
 def main_thread_channel_timeout(seconds, timeoutChannel, args=None):
     #print "main_thread_channel_timeout:ENTER", seconds
@@ -161,16 +161,6 @@ if False:
 
     unittest.TextTestRunner = NEWTextTestRunner
 
-# Remove UDP tests for now.
-if False:
-    for k in test_socket.BasicUDPTest.__dict__.keys():
-        if k.startswith("test"):
-            delattr(test_socket.BasicUDPTest, k)
-
-    for k in test_socket.UDPTimeoutTest.__dict__.keys():
-        if k.startswith("test"):
-            delattr(test_socket.UDPTimeoutTest, k)
-
 
 die = False
 last_poll_time = time.time()
@@ -202,25 +192,22 @@ if True:
                 print "** Printing thread stack traces"
                 dumpstacks()
                 break
-        print "** Printing socket channel stack traces done, exiting"
-        stacklesssocket.dump_socket_stack_traces()
+        #print "** Printing socket channel stack traces done, exiting"
+        #stacklesssocket.dump_socket_stack_traces()
         print "** Printing thread stack traces done, exiting"
         thread.interrupt_main()
         
     traceback_thread = thread.start_new_thread(periodic_traceback, ())
 
-# Narrow down testing scope.
-if False:
-    def test_main():
-        tests = [
-            test_socket.NonBlockingTCPTests,
-        ]
+from test import test_xmlrpc
 
-        thread_info = test_socket.test_support.threading_setup()
-        test_socket.test_support.run_unittest(*tests)
-        test_socket.test_support.threading_cleanup(*thread_info)
-else:
-    test_main = test_socket.test_main
+# Narrow down testing scope.
+def run_unittests():
+    print "** run_unittests.test_socket"
+    test_socket.test_main()
+    print "** run_unittests.test_xmlrpc"
+    test_xmlrpc.test_main()
+    print "** run_unittests - done"
 
 #############
 
@@ -228,9 +215,9 @@ def run():
     global last_poll_time
 
     stackless.tasklet(new_tasklet)(manage_sleeping_tasklets)
-    stackless.tasklet(new_tasklet)(test_main)
+    run_unittests_tasklet = stackless.tasklet(new_tasklet)(run_unittests)
 
-    while len(asyncore.socket_map) or stackless.runcount:
+    while run_unittests_tasklet.alive:
         last_poll_time = time.time()
         try:
             # print "POLL", len(asyncore.socket_map),
@@ -248,13 +235,13 @@ def run():
 
 try:
     run()
-except BaseException:
-    print "** Unexpected exit from test execution."
-    traceback.print_exc()
 except KeyboardInterrupt:
     print "** Ctrl-c pressed"
     dumpstacks()
-    stacklesssocket.dump_socket_stack_traces()
+    # stacklesssocket.dump_socket_stack_traces()
+except BaseException:
+    print "** Unexpected exit from test execution."
+    traceback.print_exc()
 finally:
     print "** Exit"
     die = True
