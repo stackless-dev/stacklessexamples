@@ -200,11 +200,17 @@ if True:
     traceback_thread = thread.start_new_thread(periodic_traceback, ())
 
 from test import test_xmlrpc
+from test import test_urllib
+from test import test_urllib2
 
 # Narrow down testing scope.
 def run_unittests():
     print "** run_unittests.test_socket"
     test_socket.test_main()
+    print "** run_unittests.test_urllib"
+    test_urllib.test_main()
+    print "** run_unittests.test_urllib2"
+    test_urllib2.test_main()
     print "** run_unittests.test_xmlrpc"
     test_xmlrpc.test_main()
     print "** run_unittests - done"
