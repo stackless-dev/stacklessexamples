@@ -112,7 +112,7 @@ def _wait_for_select(channel, rlist, wlist, xlist, timeout):
     channel.send_exception(select.error, errorContext)
 
 def _select(rlist, wlist, xlist, timeout=None):
-    if stackless.current.thread_id == main_thread_id:
+    if stackless.current.thread_id == main_thread_id and timeout != 0:
         channel = stackless.channel()
         thread_id = stdstart_new_thread(_wait_for_select, (channel, rlist, wlist, xlist, timeout))
         return channel.receive()
