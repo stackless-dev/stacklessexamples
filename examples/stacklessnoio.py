@@ -14,7 +14,7 @@
 # need to make available in a different way.
 #
 
-import gc, sys
+import gc, sys, types, os
 import logging
 
 logging.basicConfig()
@@ -24,31 +24,70 @@ log.setLevel(logging.DEBUG)
 
 blacklist = [
     "time.sleep",
+
+    "select.epoll",
+    "select.poll",
     "select.select",
+    
+    "subprocess.call",
+    "subprocess.check_call",
+    "subprocess.Popen.wait",
 ]
 
 
 def install():
     for blacklist_name in blacklist:
-        module_name, entry_name = blacklist_name.rsplit(".", 1)
-        module = __import__(module_name)
+        import_name, entry_name = blacklist_name.rsplit(".", 1)
+        idx = import_name.find(".")
+        if idx == -1:
+            # module.function
+            module_name = import_name
+            from_list = []
+        else:
+            # module.class.function
+            module_name = import_name[:idx]
+            from_list = [ import_name[idx+1:] ]
 
-        # Get the actual function we are blacklisting.  We do not clobber
-        # it directly, as it will get clobbered indirectly.
-        unguarded_entry = getattr(module, entry_name)
+        module = __import__(module_name, {}, {}, from_list)
+        if len(from_list):
+            # module.class
+            target = getattr(module, from_list[0])
+        else:
+            # module
+            target = module
 
         install_count = 0
-        for referrer in gc.get_referrers(unguarded_entry):
-            # At this time, dictionaries are our only known locations.
-            if type(referrer) is not dict:
+
+        if type(target) is types.ModuleType:
+            # Get the actual function we are blacklisting.  We do not clobber
+            # it directly, as it will get clobbered indirectly.
+            unguarded_entry = getattr(target, entry_name, None)
+            if unguarded_entry is None:
+                log.debug("Failed to locate '%s' on module '%s'", entry_name, module_name)
                 continue
 
-            # Find the key the entry is stored under, and replace the entry.
-            for k, v in referrer.iteritems():
-                if v is unguarded_entry:
-                    referrer[k] = _make_guarded_call(blacklist_name, unguarded_entry)
-                    install_count += 1
-                    break
+            for referrer in gc.get_referrers(unguarded_entry):
+                # At this time, dictionaries are our only known locations.
+                if type(referrer) is not dict:
+                    continue
+
+                # Find the key the entry is stored under, and replace the entry.
+                for k, v in referrer.iteritems():
+                    if v is unguarded_entry:
+                        referrer[k] = _make_guarded_call(blacklist_name, unguarded_entry)
+                        install_count += 1
+                        break
+
+        elif type(target) in (types.TypeType, types.ClassType):
+            if entry_name not in target.__dict__:
+                log.debug("Failed to locate '%s' on class '%s.%s'", entry_name, module_name, from_list[0])
+                continue
+
+            unguarded_entry = target.__dict__[entry_name]
+            setattr(target, entry_name, _make_guarded_call(blacklist_name, unguarded_entry))
+
+        else:
+            raise NotImplemented
 
         log.info("Installed call guard for '%s' (%d references)", blacklist_name, install_count)
 
@@ -84,17 +123,24 @@ import time
 
 if __name__ == "__main__":
     install()
+
+    if os.name == "nt":
+        import subprocess
+        fh = open("NUL", "w")
+        pio = subprocess.Popen("netstat.exe", stdout=fh)
+        pio.wait()
     
-    def test():
-        time.sleep(5.0)
+    if False:
+        def test():
+            time.sleep(5.0)
 
-    # Make an access when it is guarded.
-    try:
-        test()
-        raise Exception("Did not raise NoioException")
-    except NoioException:
-        pass
+        # Make an access when it is guarded.
+        try:
+            test()
+            raise Exception("Did not raise NoioException")
+        except NoioException:
+            pass
 
-    # Make an unguarded access.
-    unguarded(test)
+        # Make an unguarded access.
+        unguarded(test)
 
