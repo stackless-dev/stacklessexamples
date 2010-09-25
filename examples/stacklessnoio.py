@@ -21,22 +21,49 @@ logging.basicConfig()
 log = logging.getLogger("noio")
 log.setLevel(logging.DEBUG)
 
+# TODO: The lock object is depended on, and cannot be directly patched.
 
-blacklist = [
-    "time.sleep",
+TYPE_PATCH = 0
+TYPE_PROXY = 1
 
-    "select.epoll",
-    "select.poll",
-    "select.select",
+blacklist = [                                           # when the call is okay
+    [ "os.fork",                        TYPE_PATCH, ],
+    [ "os.read",                        TYPE_PATCH, ],
+    [ "os.system",                      TYPE_PATCH, ],
+    [ "os.wait",                        TYPE_PATCH, ],
+    [ "os.waitpid",                     TYPE_PATCH, ],
+    [ "os.wait3",                       TYPE_PATCH, ],
+    [ "os.wait4",                       TYPE_PATCH, ],
+    [ "os.write",                       TYPE_PATCH, ],
+    [ "os.system",                      TYPE_PATCH, ],
+
+    [ "select.epoll",                   TYPE_PATCH, ],
+    [ "select.poll",                    TYPE_PATCH, ],
+    [ "select.select",                  TYPE_PATCH, ],  # timeout == 0
     
-    "subprocess.call",
-    "subprocess.check_call",
-    "subprocess.Popen.wait",
+    [ "subprocess.call",                TYPE_PATCH, ],
+    [ "subprocess.check_call",          TYPE_PATCH, ],
+    [ "subprocess.Popen.wait",          TYPE_PATCH, ],
+
+    [ "threading._Condition.acquire",   TYPE_PROXY, ],
+    [ "threading._Condition.wait",      TYPE_PATCH, ],
+    [ "threading.Event.wait",           TYPE_PATCH, ],
+    [ "threading.Lock.acquire",         TYPE_PROXY, ],  # blocking=0
+    [ "threading.RLock.acquire",        TYPE_PROXY, ],  # blocking=0
+    [ "threading.Semaphore.acquire",    TYPE_PROXY, ],  # blocking=0
+    [ "threading.Thread.join",          TYPE_PATCH, ],
+
+    [ "time.sleep",                     TYPE_PATCH, ],  # delay == 0
 ]
 
 
+
 def install():
-    for blacklist_name in blacklist:
+    for blacklist_name, blacklist_type in blacklist:
+        if blacklist_type == TYPE_PROXY:
+            log.debug("Unable to patch proxy type '%s' at this time", blacklist_name)
+            continue
+    
         import_name, entry_name = blacklist_name.rsplit(".", 1)
         idx = import_name.find(".")
         if idx == -1:
@@ -77,7 +104,6 @@ def install():
                         referrer[k] = _make_guarded_call(blacklist_name, unguarded_entry)
                         install_count += 1
                         break
-
         elif type(target) in (types.TypeType, types.ClassType):
             if entry_name not in target.__dict__:
                 log.debug("Failed to locate '%s' on class '%s.%s'", entry_name, module_name, from_list[0])
@@ -85,8 +111,10 @@ def install():
 
             unguarded_entry = target.__dict__[entry_name]
             setattr(target, entry_name, _make_guarded_call(blacklist_name, unguarded_entry))
-
+        elif type(target) is types.FunctionType:
+            pass
         else:
+            print target, type(target), entry_name
             raise NotImplemented
 
         log.info("Installed call guard for '%s' (%d references)", blacklist_name, install_count)
