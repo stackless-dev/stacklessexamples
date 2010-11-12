@@ -34,6 +34,7 @@
 
 import stackless
 import asyncore, weakref, time, select, types
+from collections import deque
 
 # If you pump the scheduler and wish to prevent the scheduler from staying
 # non-empty for prolonged periods of time, If you do not pump the scheduler,
@@ -54,8 +55,21 @@ VALUE_MAX_NONBLOCKINGREAD_CALLS = 100
 asyncore.socket_map = weakref.WeakValueDictionary()
 
 import socket as stdsocket # We need the "socket" name for the function we export.
-from errno import EALREADY, EINPROGRESS, EWOULDBLOCK, ECONNRESET, \
-     ENOTCONN, ESHUTDOWN, EINTR, EISCONN, EBADF, ECONNABORTED
+try:
+    from errno import EALREADY, EINPROGRESS, EWOULDBLOCK, ECONNRESET, \
+         ENOTCONN, ESHUTDOWN, EINTR, EISCONN, EBADF, ECONNABORTED
+except Exception:
+    # Fallback on hard-coded PS3 constants.
+    EALREADY = 37
+    EINPROGRESS = 36
+    EWOULDBLOCK = 35
+    ECONNRESET = 54
+    ENOTCONN = 57
+    ESHUTDOWN = 58
+    EINTR = 4
+    EISCONN = 56
+    EBADF = 9
+    ECONNABORTED = 53
 
 # If we are to masquerade as the socket module, we need to provide the constants.
 if "__all__" in stdsocket.__dict__:
@@ -181,7 +195,6 @@ class _fakesocket(asyncore.dispatcher):
     _blocking = True
 
     lastReadChannelRef = None
-    lastReadArguments = None
     lastReadTally = 0
     lastReadCalls = 0
 
@@ -194,9 +207,9 @@ class _fakesocket(asyncore.dispatcher):
         # This will register the real socket in the internal socket map.
         asyncore.dispatcher.__init__(self, realSocket)
 
-        self.readQueue = []
-        self.writeQueue = []
-        self.sendToBuffers = []
+        self.readQueue = deque()
+        self.writeQueue = deque()
+        self.sendToBuffers = deque()
 
         if can_timeout():
             self._timeout = stdsocket.getdefaulttimeout()
@@ -248,8 +261,6 @@ class _fakesocket(asyncore.dispatcher):
     def readable(self):
         if self.socket.type == SOCK_DGRAM:
             return True
-        #if not hasattr(self, "readQueue"):
-        #    print self
         if len(self.readQueue):
             return True
         if self.acceptChannel is not None and self.acceptChannel.balance < 0:
@@ -343,13 +354,11 @@ class _fakesocket(asyncore.dispatcher):
             generalArgs = tuple(generalArgs)
         else:
             generalArgs = args
-        channelKey = methodName, generalArgs
-        #print self._fileno, "_recv:---ENTER---", channelKey
+        #print self._fileno, "_recv:---ENTER---", (methodName, args)
         while True:
             channel = None
             if self.lastReadChannelRef is not None and self.lastReadTally < VALUE_MAX_NONBLOCKINGREAD_SIZE and self.lastReadCalls < VALUE_MAX_NONBLOCKINGREAD_CALLS:
-                if channelKey == self.lastReadArguments:
-                    channel = self.lastReadChannelRef()
+                channel = self.lastReadChannelRef()
                 self.lastReadChannelRef = None
             #elif self.lastReadTally >= VALUE_MAX_NONBLOCKINGREAD_SIZE or self.lastReadCalls >= VALUE_MAX_NONBLOCKINGREAD_CALLS:
                 #print "_recv:FORCE-CHANNEL-CHANGE %d %d" % (self.lastReadTally, self.lastReadCalls)
@@ -361,7 +370,7 @@ class _fakesocket(asyncore.dispatcher):
                 #print self._fileno, "_recv:NEW-CHANNEL", id(channel)
                 self.readQueue.append([ channel, methodName, args ])
             else:
-                self.readQueue[0][2] = args
+                self.readQueue[0][1:] = (methodName, args)
                 #print self._fileno, "_recv:RECYCLE-CHANNEL", id(channel), self.lastReadTally
 
             try:
@@ -374,35 +383,40 @@ class _fakesocket(asyncore.dispatcher):
                     raise
             break
 
+        #storing the last channel is a way to communicate with the producer tasklet, so that it
+        #immediately tries to read more, when we do the next receive.  This is to optimize cases
+        #where one can do multiple recv() calls without blocking, but each call only gives you
+        #a limited amount of data.  We then get a tight tasklet interaction between consumer
+        #and producer until EWOULDBLOCK is received from the socket.
         self.lastReadChannelRef = weakref.ref(channel)
-        self.lastReadArguments = channelKey
         if isinstance(ret, types.StringTypes):
-            self.lastReadTally += len(ret)
+            recvlen = len(ret)
         elif methodName == "recvfrom":
-            self.lastReadTally += len(ret[0])
+            recvlen = len(ret[0])
         elif methodName == "recvfrom_into":
-            self.lastReadTally += ret[0]
+            recvlen = ret[0]
         else:
-            self.lastReadTally += ret            
+            recvlen = ret
+        self.lastReadTally += recvlen
         self.lastReadCalls += 1
 
-        #print self._fileno, "_recv:---EXIT---", channelKey, len(ret), self.lastReadChannelRef()
+        #print self._fileno, "_recv:---EXIT---", (methodName, args) , recvlen, self.lastReadChannelRef()
 
         return ret
 
     def recv(self, *args):
-        #if not self.connected:
-        #    # Sockets which have never been connected do this.
-        #    if not self.wasConnected:
-        #        raise error(10057, 'Socket is not connected')
+        if not self.connected:
+            # Sockets which have never been connected do this.
+            if not self.wasConnected:
+                raise error(10057, 'Socket is not connected')
 
         return self._recv("recv", args)
 
     def recv_into(self, *args):
-        #if not self.connected:
-        #    # Sockets which have never been connected do this.
-        #    if not self.wasConnected:
-        #        raise error(10057, 'Socket is not connected')
+        if not self.connected:
+            # Sockets which have never been connected do this.
+            if not self.wasConnected:
+                raise error(10057, 'Socket is not connected')
 
         return self._recv("recv_into", args, sizeIdx=1)
 
