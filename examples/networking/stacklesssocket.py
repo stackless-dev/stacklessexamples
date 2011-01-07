@@ -37,7 +37,7 @@
 # internal version of this module in use at CCP Games.
 #
 
-import stackless
+import stackless #, logging
 import asyncore, weakref, time, select, types, sys, gc
 from collections import deque
 
@@ -678,15 +678,16 @@ class _fakesocket(asyncore.dispatcher):
                     result = self.socket.send(data, flags)
                     return result
                 except stdsocket.error, why:
+                    # logging.root.exception("SOME SEND ERROR")
                     if why.args[0] == EWOULDBLOCK:
                         return 0
-                    elif why.args[0] in (ECONNRESET, ENOTCONN, ESHUTDOWN, ECONNABORTED):
-                        # Ensure the sender appears to have directly received this exception.
-                        channel.send_exception(why.__class__, *why.args)
+
+                    # Ensure the sender appears to have directly received this exception.
+                    channel.send_exception(why.__class__, *why.args)
+
+                    if why.args[0] in (ECONNRESET, ENOTCONN, ESHUTDOWN, ECONNABORTED):
                         self.handle_close()
-                        return 0
-                    else:
-                        raise
+                    return 0
 
             nbytes = asyncore_send(self, data, flags)
             if channel.balance < 0:
