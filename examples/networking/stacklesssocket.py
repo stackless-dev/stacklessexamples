@@ -385,7 +385,7 @@ class _fakesocket(asyncore.dispatcher):
 
         channel = stackless.channel()
         channel.preference = 1 # Prefer the sender.
-        self.writeQueue.append((flags, data, channel))
+        self.writeQueue.append((channel, flags, data))
         return self.receive_with_timeout(channel)
 
     def send(self, data, flags=0):
@@ -669,7 +669,7 @@ class _fakesocket(asyncore.dispatcher):
         This function still needs work WRT UDP.
         """
         if len(self.writeQueue):
-            flags, data, channel = self.writeQueue[0]
+            channel, flags, data = self.writeQueue[0]
             del self.writeQueue[0]
 
             # asyncore does not expose sending the flags.
