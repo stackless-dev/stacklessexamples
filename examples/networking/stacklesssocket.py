@@ -263,7 +263,19 @@ def ready_to_schedule(flag):
                 _fakesocket.__dict__[attributeName] = reroute_wrapper(attributeName)
 
 
-class _fakesocket(asyncore.dispatcher):
+# asyncore in Python 2.6 treats socket connection errors as connections.
+if sys.version_info[0] == 2 and sys.version_info[1] == 6:
+    class asyncore_dispatcher(asyncore.dispatcher):
+        def handle_connect_event(self):
+            err = self.socket.getsockopt(stdsocket.SOL_SOCKET, stdsocket.SO_ERROR)
+            if err != 0:
+                raise stdsocket.error(err, asyncore._strerror(err))
+            super(asyncore_dispatcher, self).handle_connect_event()
+else:
+    asyncore_dispatcher = asyncore.dispatcher
+
+
+class _fakesocket(asyncore_dispatcher):
     connectChannel = None
     acceptChannel = None
     wasConnected = False
@@ -282,7 +294,7 @@ class _fakesocket(asyncore.dispatcher):
             raise StandardError("An invalid socket passed to fakesocket %s" % realSocket.__class__)
 
         # This will register the real socket in the internal socket map.
-        asyncore.dispatcher.__init__(self, realSocket)
+        asyncore_dispatcher.__init__(self, realSocket)
 
         self.readQueue = deque()
         self.writeQueue = deque()
@@ -369,7 +381,7 @@ class _fakesocket(asyncore.dispatcher):
         then it is the responsibility of the user to close the socket, should
         they not wish the connection to potentially establish anyway.
         """
-        asyncore.dispatcher.connect(self, address)
+        asyncore_dispatcher.connect(self, address)
         
         # UDP sockets do not connect.
         if self.socket.type != SOCK_DGRAM and not self.connected:
@@ -507,7 +519,7 @@ class _fakesocket(asyncore.dispatcher):
         if self._fileno is None:
             return
 
-        asyncore.dispatcher.close(self)
+        asyncore_dispatcher.close(self)
 
         self.connected = False
         self.accepting = False
@@ -564,7 +576,7 @@ class _fakesocket(asyncore.dispatcher):
 
     def handle_accept(self):
         if self.acceptChannel and self.acceptChannel.balance < 0:
-            t = asyncore.dispatcher.accept(self)
+            t = asyncore_dispatcher.accept(self)
             if t is None:
                 return
             t[0].setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
