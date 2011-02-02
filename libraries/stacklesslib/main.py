@@ -164,10 +164,10 @@ class MainLoop(object):
         """ Perform whatever tasks required to wake up sleeping tasks """
         event_queue.pump()
         
-    def run_tasklets(self):
+    def run_tasklets(self, run_for=0):
         """ Run tasklets for as long as necessary """
         try:
-            stackless.run()
+            stackless.run(run_for)
         except Exception:
             self.handle_run_error(sys.exc_info())
 

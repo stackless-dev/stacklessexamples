@@ -207,7 +207,8 @@ class Condition(LockMixin):
                     timeout = endtime - elapsed_time()
                     if timeout < 0:
                         return result #a timeout occurred
-            result = self.wait(timeout)
+            self.wait(timeout)
+            result = predicate()
         return result
                 
     def notify(self, n=1):

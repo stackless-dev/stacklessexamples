@@ -53,14 +53,15 @@ class local(object):
             d[stackless.getcurrent()] = a
         return a
         
-    def __getattribute__(self, name):
+    def __getattribute__(self, name):        
         a = object.__getattribute__(self, "get_dict")()
         if name == "__dict__":
             return a
-        try:
+        elif name in a:
             return a[name]
-        except KeyError:
-            raise AttributeError, name
+        else:
+            return object.__getattribute__(self, name)            
+
     
     def __setattr__(self, name, value):
         a = object.__getattribute__(self, "get_dict")()
