@@ -167,21 +167,21 @@ class MainLoop(object):
     def run_tasklets(self, run_for=0):
         """ Run tasklets for as long as necessary """
         try:
-            stackless.run(run_for)
+            return stackless.run(run_for)
         except Exception:
             self.handle_run_error(sys.exc_info())
 
     def handle_run_error(self, ei):
         traceback.print_exception(*ei)
 
-    def pump(self):
+    def pump(self, run_for=0):
         t = time.time()
         wait_time = self.get_wait_time(t)
         if wait_time:
             self.wait(wait_time)
             t = elapsed_time()
         self.wakeup_tasklets(t + 0.001) #fuzz
-        self.run_tasklets()
+        return self.run_tasklets(run_for=run_for)
         
     def run(self):
         while self.running:

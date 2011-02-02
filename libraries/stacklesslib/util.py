@@ -38,6 +38,20 @@ def block_trap(trap=True):
     finally:
         c.block_trap = old
 
+@contextlib.contextmanager
+def ignore_nesting(flag=True):
+    """
+    A context manager which allows the current tasklet to engage the
+    ignoring of nesting levels.  By default pre-emptive switching can
+    only happen at the top nesting level, setting this allows it to
+    happen at all nesting levels.  Defaults to setting it to True.
+    """
+    c = stackless.getcurrent()
+    old = c.set_ignore_nesting(flag)
+    try:
+        yield
+    finally:
+        c.set_ignore_nesting(old)
 
 class local(object):
     """Tasklet local storage.  Similar to threading.local"""
