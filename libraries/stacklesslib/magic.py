@@ -13,7 +13,7 @@ try:
 except:
     stacklessio = False
 
-from  stacklesslib.replacements import thread, threading, popen
+from  stacklesslib.replacements import thread, threading, popen, select
 
 def monkeypatch():
     #inject stacklessio
@@ -23,6 +23,7 @@ def monkeypatch():
     #inject slthreading as threading
     sys.modules["threading"] = threading
     sys.modules["thread"] = thread
+    sys.modules["select"] = select
     
     #fudge time.sleep
     time.sleep = main.sleep
