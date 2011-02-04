@@ -494,18 +494,18 @@ class _fakesocket(asyncore_dispatcher):
         return ret
 
     def recv(self, *args):
-        if not self.connected:
+        if self.socket.type != SOCK_DGRAM and not self.connected:
             # Sockets which have never been connected do this.
             if not self.wasConnected:
-                raise error(10057, 'Socket is not connected')
+                raise error(ENOTCONN, 'Socket is not connected')
 
         return self._recv("recv", args)
 
     def recv_into(self, *args):
-        if not self.connected:
+        if self.socket.type != SOCK_DGRAM and not self.connected:
             # Sockets which have never been connected do this.
             if not self.wasConnected:
-                raise error(10057, 'Socket is not connected')
+                raise error(ENOTCONN, 'Socket is not connected')
 
         return self._recv("recv_into", args, sizeIdx=1)
 
@@ -559,7 +559,7 @@ class _fakesocket(asyncore_dispatcher):
         if not self.connected:
             # The socket was never connected.
             if not self.wasConnected:
-                raise error(10057, "Socket is not connected")
+                raise error(ENOTCONN, "Socket is not connected")
             # The socket has been closed already.
             raise error(EBADF, 'Bad file descriptor')
 
