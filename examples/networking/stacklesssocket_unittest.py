@@ -1,9 +1,10 @@
 import thread
 import stackless
+import sys
 
-
-import stacklessthread
-stacklessthread.install()
+import stacklesslib.main
+import stacklesslib.magic
+stacklesslib.magic.monkeypatch()
 
 import stacklesssocket
 stacklesssocket.install()
@@ -11,15 +12,9 @@ stacklesssocket.managerRunning = True
 
 
 import asyncore, traceback, sys, time, threading
-main_thread = threading.currentThread()
-try:
-    main_thread_id = main_thread.ident
-except AttributeError:
-    print __file__, "Looks like Python 2.5, working around it"
-    main_thread_id = stackless.main.thread_id
+from test import test_support
 
-#import stacklessthread
-#stacklessthread.install()
+main_thread_id = stackless.main.thread_id
 
 def new_tasklet(f, *args, **kwargs):
     try:
@@ -28,7 +23,6 @@ def new_tasklet(f, *args, **kwargs):
         print "TASKLET CAUGHT EXCEPTION"
         traceback.print_exc()
 
-from test import test_socket
 
 sleepingTasklets = []
 workerChannels = []
@@ -94,32 +88,12 @@ def main_thread_channel_timeout(seconds, timeoutChannel, args=None):
             raise RuntimeError("Bad worker tasklet")
     #print "main_thread_channel_timeout:EXIT"
 
-def sleep(secondsToWait):
-    """ Put the current tasklet to sleep for a number of seconds. """
-    channel = stackless.channel()
-    channel.preference = 1
-    endTime = time.time() + secondsToWait
-    sleepingTasklets.append((endTime, channel))
-    sleepingTasklets.sort()
-    s = str(endTime) +" "+ str(sleepingTasklets[-1])
-    #print endTime, "ADDED A SLEEPING TASKLET AT ", time.time()
-    # Block until we get sent an awakening notification.
-    ret = channel.receive()
-    #print endTime, "REMOVED A SLEEPING TASKLET AT", time.time()
-    return ret
-
-def manage_sleeping_tasklets():
-    """ Awaken all tasklets which are due to be awakened. """
-    while True:
-        while len(sleepingTasklets):
-            endTime = sleepingTasklets[0][0]
-            if endTime > time.time():
-                break
-            channel = sleepingTasklets[0][1]
-            del sleepingTasklets[0]
-            # It does not matter what we send as it is not used.
-            channel.send(None)
-        stackless.schedule()
+sleep = stacklesslib.main.sleep
+class DummyClass:
+    pass
+time_replacement = DummyClass()
+time_replacement.sleep = stacklesslib.magic.time_sleep
+asyncore.time = time_replacement
 
 stacklesssocket._sleep_func = sleep
 stacklesssocket._timeout_func = main_thread_channel_timeout
@@ -128,10 +102,19 @@ stacklesssocket._timeout_func = main_thread_channel_timeout
 ##############
 
 # More error context
-if True: 
+if False: 
+    def serverExplicitReady(self):
+        print "self.server_ready.set()"
+        print "self.serv", self.serv
+        print "self.port", self.port
+        self.server_ready.set()
+
     def clientRun(self, test_func):
+        print "self.server_ready.wait()"
         self.server_ready.wait()
+        print "self.client_ready.set()"
         self.client_ready.set()
+        print "self.clientSetUp()"
         self.clientSetUp()
         if not callable(test_func):
             raise TypeError, "test_func must be a callable function"
@@ -143,6 +126,8 @@ if True:
             self.queue.put(strerror)
         self.clientTearDown()
 
+    from test import test_socket
+    test_socket.ThreadableTest.serverExplicitReady = serverExplicitReady
     test_socket.ThreadableTest.clientRun = clientRun
 
 # More error context
@@ -204,32 +189,43 @@ from test import test_urllib
 from test import test_urllib2
 
 # Narrow down testing scope.
-def run_unittests():
-    print "** run_unittests.test_socket"
-    test_socket.test_main()
-    print "** run_unittests.test_urllib"
-    test_urllib.test_main()
-    print "** run_unittests.test_urllib2"
-    test_urllib2.test_main()
-    print "** run_unittests.test_xmlrpc"
-    test_xmlrpc.test_main()
-    print "** run_unittests - done"
+def run_unittests(*testNames):
+    from test import test_socket
+    if len(testNames):
+        # For now these have to be socket test names.
+        import unittest
+        s = unittest.TestSuite()
+        for testName in testNames:
+            s.addTest(test_socket.BasicTCPTest(testName))
+        unittest.TextTestRunner(verbosity=3).run(s)
+    else:
+        print "** run_unittests.test_socket"
+        test_socket.test_main()
+        print "** run_unittests.test_urllib"
+        test_urllib.test_main()
+        print "** run_unittests.test_urllib2"
+        test_urllib2.test_main()
+        print "** run_unittests.test_xmlrpc"
+        test_xmlrpc.test_main()
+        print "** run_unittests - done"
 
 #############
 
 def run():
     global last_poll_time
 
-    stackless.tasklet(new_tasklet)(manage_sleeping_tasklets)
-    run_unittests_tasklet = stackless.tasklet(new_tasklet)(run_unittests)
+    testNames = [] # [ "testFromFd" ]
+
+    run_unittests_tasklet = stackless.tasklet(new_tasklet)(run_unittests, *testNames)
 
     while run_unittests_tasklet.alive:
         last_poll_time = time.time()
         try:
+            stacklesslib.main.mainloop.pump()
             # print "POLL", len(asyncore.socket_map),
             asyncore.poll(0.05)
             # print "SCHEDULE", stackless.runcount,
-            stackless.schedule()
+            # stackless.schedule()
         except Exception, e:
             if isinstance(e, ReferenceError):
                 print "run:EXCEPTION", str(e), asyncore.socket_map
