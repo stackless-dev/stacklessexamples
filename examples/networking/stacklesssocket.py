@@ -80,7 +80,7 @@ except Exception:
 
 # If we are to masquerade as the socket module, we need to provide the constants.
 if "__all__" in stdsocket.__dict__:
-    __all__ = stdsocket.__dict__
+    __all__ = stdsocket.__all__
     for k, v in stdsocket.__dict__.iteritems():
         if k in __all__:
             globals()[k] = v
@@ -191,7 +191,7 @@ def make_blocking_socket(family=AF_INET, type=SOCK_STREAM, proto=0):
 
 
 def install(pi=None):
-    global poll_interval    
+    global poll_interval
     if stdsocket._realsocket is socket:
         raise StandardError("Still installed")
     stdsocket._realsocket = socket
@@ -212,7 +212,7 @@ def ready_to_schedule(flag):
     function is intended to allow all sockets to be switched between working
     "stacklessly" or working directly on their underlying socket objects in a
     blocking manner.
-    
+
     Note that sockets created while this is in effect lack attribute values that
     asyncore or this module may have set if the sockets were created in a full
     monkey patched manner.
@@ -419,7 +419,7 @@ class _fakesocket(asyncore_dispatcher):
         else:
             flags = 0
             sendAddress = sendArg1
-            
+
         waitChannel = None
         for idx, (data, address, channel, sentBytes) in enumerate(self.sendToBuffers):
             if address == sendAddress:
@@ -436,7 +436,7 @@ class _fakesocket(asyncore_dispatcher):
 
         if self._fileno is None:
             return ""
-        
+
         if len(args) >= sizeIdx+1:
             generalArgs = list(args)
             generalArgs[sizeIdx] = 0
@@ -576,7 +576,7 @@ class _fakesocket(asyncore_dispatcher):
 
     def handle_accept(self):
         if self.acceptChannel and self.acceptChannel.balance < 0:
-            t = asyncore_dispatcher.accept(self)
+            t = asyncore.dispatcher.accept(self)
             if t is None:
                 return
             t[0].setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
@@ -596,7 +596,7 @@ class _fakesocket(asyncore_dispatcher):
         # sends and the like from going through.
         self.connected = False
         self.accepting = False
-        
+
         # This also gets called in the case that a non-blocking connect gets
         # back to us with a no.  If we don't reject the connect, then all
         # connect calls that do not connect will block indefinitely.
@@ -619,12 +619,12 @@ class _fakesocket(asyncore_dispatcher):
     def handle_read(self):
         """
             This will be called once per-poll call per socket with data in its buffer to be read.
-            
+
             If you call poll once every 30th of a second, then you are going to be rate limited
             in terms of how fast you can read incoming data by the packet size they arrive in.
             In order to deal with the worst case scenario, advantage is taken of how scheduling
             works in order to keep reading until there is no more data left to read.
-            
+
             1.  This function is called indicating data is present to read.
             2.  The desired amount is read and a send call is made on the channel with it.
             3.  The function is blocked on that action and the tasklet it is running in is reinserted into the scheduler.
@@ -641,13 +641,13 @@ class _fakesocket(asyncore_dispatcher):
             Note that if this function loops indefinitely, and the scheduler is pumped rather than
             continuously run, the pumping application will stay in its pump call for a prolonged
             period of time potentially starving the rest of the application for CPU time.
-            
+
             An attempt is made in _recv to limit the amount of data read in this manner to a fixed
             amount and it lets this function exit if that amount is exceeded.  However, this it is
             up to the user of Stackless to understand how their application schedules and blocks,
-            and there are situations where small reads may still effectively loop indefinitely.            
+            and there are situations where small reads may still effectively loop indefinitely.
         """
-    
+
         if not len(self.readQueue):
             return
 
@@ -725,12 +725,11 @@ if False:
                     current = v.queue
                     while i == 0 or v.queue is not current:
                         print "%s.%s.%s" % (skt, k, i)
-                        traceback.print_stack(t)
+                        traceback.print_stack(v.queue.frame)
                         i += 1
 
 
 if __name__ == '__main__':
-    import sys
     import struct
     # Test code goes here.
     testAddress = "127.0.0.1", 3000
