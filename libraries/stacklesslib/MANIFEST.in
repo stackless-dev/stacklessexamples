@@ -1,0 +1,3 @@
+recursive-include stacklesslib *
+include COPYING.txt
+include README.txt
