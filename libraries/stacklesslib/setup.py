@@ -2,12 +2,12 @@ from setuptools import setup
 
 setup(
     name = "stacklesslib",
-    packages = ["stacklesslib"],
+    packages = ["stacklesslib", "stacklesslib.replacements"],
     version = "1.0.3",
     description = "Standard Stackless Python supporting functionality",
     author = "Richard Tew",
     author_email = "richard.m.tew@gmail.com",
-    url = "http://code.google.com/p/sake/",
+    url = "http://pypi.python.org/pypi/stacklesslib",
     keywords = ["microthreads", "coroutines", "stackless", "monkeypatching"],
     classifiers = [
         "Programming Language :: Python",

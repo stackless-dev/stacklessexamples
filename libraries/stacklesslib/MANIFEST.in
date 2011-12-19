@@ -1,3 +1,2 @@
-recursive-include stacklesslib *
-include COPYING.txt
-include README.txt
+include *.txt
+recursive-include stacklesslib *.py
