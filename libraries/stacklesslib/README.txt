@@ -31,6 +31,14 @@ Useful supporting functionality:
 Changes
 -------
 
+Version 1.0.4:
+
+ * Modified monkey-patching to by default run a tasklet to pump
+   the scheduler.  The ideal goal is that a user just needs to install
+   the monkey-patching and a non-Stackless standard library dependent
+   module should be able to be run without further modifications.
+ * Removed duplicate sleep method.
+
 Version 1.0.3:
 
  * All previous versions had broken eggs.  This was because the manifest was not

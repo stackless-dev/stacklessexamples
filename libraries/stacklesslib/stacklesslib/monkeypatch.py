@@ -14,8 +14,7 @@ except ImportError:
 
 
 
-def patch_all():
-    
+def patch_all(autonomous=True):
     patch_misc()
     
     patch_thread()
@@ -23,6 +22,9 @@ def patch_all():
     
     patch_select()
     patch_socket()
+    
+    if autonomous:
+        main.mainloop.start()
     
 
 def patch_misc():
@@ -50,7 +52,7 @@ def patch_select():
         from stacklesslib.replacements import select
     sys.modules["select"] = select
 
-def patch_socket(will_be_pumped=True):
+def patch_socket(autononous=True):
     """
     Selectively choose to monkey-patch the 'socket' module.
 
@@ -67,7 +69,8 @@ def patch_socket(will_be_pumped=True):
         from stacklesslib.replacements import socket
         socket._sleep_func = main.sleep
         socket._schedule_func = lambda: main.sleep(0)
-        if will_be_pumped:
+        # If the user plans to pump themselves, disable auto-pumping.
+        if not autononous:
             socket._manage_sockets_func = lambda: None
         socket.install()
-        
+       

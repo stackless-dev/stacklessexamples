@@ -134,9 +134,10 @@ def ManageSockets():
     try:
         while len(asyncore.socket_map):
             # Check the sockets for activity.
-            #print "POLL"
+            # print "POLL"
             asyncore.poll(poll_interval)
             # Yield to give other tasklets a chance to be scheduled.
+            # print "SCHED"
             _schedule_func()
     finally:
         managerRunning = False

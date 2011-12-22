@@ -171,7 +171,11 @@ class MainLoop(object):
     def run_tasklets(self, run_for=0):
         """ Run tasklets for as long as necessary """
         try:
-            return stackless.run(run_for)
+            # Can only directly invoke the scheduler from the main tasklet.
+            if stackless.current is stackless.main:
+                return stackless.run(run_for)
+            else:
+                stackless.schedule()
         except Exception:
             self.handle_run_error(sys.exc_info())
 
@@ -190,7 +194,11 @@ class MainLoop(object):
     def run(self):
         while self.running:
             self.pump()
-            
+
+    def start(self):
+        t = stackless.tasklet(self.run)()
+        t.run()
+
     def stop(self):
         self.running = False
         
@@ -213,18 +221,6 @@ class SLIOMainLoop(MainLoop):
     def interrupt_wait(self):
         stacklessio.break_wait()
 
-
-# Perhaps this function should be elsewhere...
-def sleep(delay):
-    """Sleep the current tasklet for a while"""
-    c = stackless.channel()
-    set_channel_pref(c)
-    def wakeup():
-        if c.balance:
-            c.send(None)
-    event_queue.push_after(wakeup, delay)
-    c.receive()
-
     
 event_queue = EventQueue()
 # Disable preferred socket solution of stacklessio for now.
@@ -232,3 +228,5 @@ if stacklessio:
     mainloop = SLIOMainLoop()
 else:
     mainloop = MainLoop()
+
+sleep = mainloop.sleep
