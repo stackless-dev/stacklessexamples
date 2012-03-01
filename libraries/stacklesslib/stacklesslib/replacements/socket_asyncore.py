@@ -1,5 +1,5 @@
 #
-# Stackless compatible socket module.
+# Stackless compatible socket module (asyncore based).
 #
 # Author: Richard Tew <richard.m.tew@gmail.com>
 #

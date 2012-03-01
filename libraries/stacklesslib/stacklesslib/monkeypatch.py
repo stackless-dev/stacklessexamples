@@ -66,7 +66,7 @@ def patch_socket(autononous=True):
         sys.modules["_socket"] = _socket
     else:
         # Fallback on the generic 'stacklesssocket' module.
-        from stacklesslib.replacements import socket
+        from stacklesslib.replacements import socket_asyncore
         socket._sleep_func = main.sleep
         socket._schedule_func = lambda: main.sleep(0)
         # If the user plans to pump themselves, disable auto-pumping.
