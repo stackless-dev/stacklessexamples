@@ -318,7 +318,7 @@ class socket(object):
                 self._opt_nodelay = bool(value)
                 self._tcp_socket.nodelay(self._opt_nodelay)
             elif optname == _TCP_KEEPALIVE:
-                self._opt_keepalive_delay = bool(value)
+                self._opt_keepalive_delay = value
                 self._tcp_socket.keep_alive(self._opt_keepalive, self._opt_keepalive_delay)
         if level == stdsocket.SOL_SOCKET:
             if optname == stdsocket.SO_KEEPALIVE:
