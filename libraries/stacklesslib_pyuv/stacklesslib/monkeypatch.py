@@ -11,6 +11,10 @@ try:
     import stacklessio
 except ImportError:
     stacklessio = False
+try:
+    import pyuv
+except ImportError:
+    pyuv = None
 
 
 
@@ -20,7 +24,7 @@ def patch_all(autonomous=True):
     patch_thread()
     patch_threading()
     
-    patch_select()
+    #patch_select()
     patch_socket()
     
     if autonomous:
@@ -66,11 +70,15 @@ def patch_socket(autononous=True):
         sys.modules["_socket"] = _socket
     else:
         # Fallback on the generic 'stacklesssocket' module.
-        from stacklesslib.replacements import socket_asyncore
+        if pyuv:
+            from stacklesslib.replacements import socket_pyuv as socket
+        else:
+            from stacklesslib.replacements import socket_asyncore as socket
+
         socket._sleep_func = main.sleep
         socket._schedule_func = lambda: main.sleep(0)
         # If the user plans to pump themselves, disable auto-pumping.
-        if not autononous:
+        if not pyuv and not autononous:
             socket._manage_sockets_func = lambda: None
         socket.install()
        

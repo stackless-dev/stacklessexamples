@@ -127,7 +127,9 @@ def pump_pyuv():
         while len(_socket_map):
             # Ensure the timeout is from the start of our run call.
             timer.again()
+            #print >>sys.xstdout, "_pyuv_loop.run_once.call"
             _pyuv_loop.run_once()
+            #print >>sys.xstdout, "_pyuv_loop.run_once.called"
             _schedule_func()
     finally:
         _pumping = False
@@ -151,7 +153,6 @@ _next_fileno = 10101000
 
 class _fakesocket(object):
     # Optionally overriden variables.
-    _accept_channel = None
     _blocking = True
     _connected = False
     _listening = False
@@ -159,8 +160,10 @@ class _fakesocket(object):
     _opt_keepalive_delay = DEFAULT_KEEPALIVE_DELAY
     _opt_nodelay = DEFAULT_NODELAY_FLAG
     _opt_reuseaddr = DEFAULT_REUSE_FLAG
+    _rchannel = None
     _timeout = None
     _was_connected = False
+    _wchannel = None
     # Official socket object functions.
     def __init__(self, family=AF_INET, type=SOCK_STREAM, proto=0):
         global _next_fileno
@@ -189,29 +192,25 @@ class _fakesocket(object):
             _new_tcp_socket._was_connected = True
             # Emulate the standard 'socket.accept' return value.
             return _new_tcp_socket, _new_tcp_socket.getpeername()
-        self._accept_channel = stackless.channel()
-        self._accept_channel.preference = 1
+        channel = self._get_rchannel()
+        # First actually try and do an accept.
+        _new_tcp_socket = _fakesocket()
         try:
-            # First actually try and do an accept.
-            _new_tcp_socket = _fakesocket()
-            try:
-                self._tcp_socket.accept(_new_tcp_socket._tcp_socket)
-                return accept_result(_new_tcp_socket)
-            except pyuv.error.TCPError:
-                # If listen has not been called yet.
-                if not self._listening:
-                    raise stdsocket.error(EINVAL)
-                # If the socket is set to non-blocking.
-                if not self._blocking:
-                    raise stdsocket.error(EWOULDBLOCK, _EWOULDBLOCK_text)
-                # Otherwise, assume all is well and block on a channel.
-                sys.exc_clear()
-            # Block until there is an incoming connection.
-            self._receive_with_timeout(self._accept_channel)
             self._tcp_socket.accept(_new_tcp_socket._tcp_socket)
             return accept_result(_new_tcp_socket)
-        finally:
-            self._accept_channel = None
+        except pyuv.error.TCPError:
+            # If listen has not been called yet.
+            if not self._listening:
+                raise stdsocket.error(EINVAL)
+            # If the socket is set to non-blocking.
+            if not self._blocking or self._timeout == 0.0:
+                raise stdsocket.error(EWOULDBLOCK, _EWOULDBLOCK_text)
+            # Otherwise, assume all is well and block on a channel.
+            sys.exc_clear()
+        # Block until there is an incoming connection.
+        self._receive_with_timeout(channel)
+        self._tcp_socket.accept(_new_tcp_socket._tcp_socket)
+        return accept_result(_new_tcp_socket)
     def bind(self, address): # TCP / UDP
         # TODO: Should do some generic lookup?
         address = self._resolve_address(address)
@@ -236,13 +235,16 @@ class _fakesocket(object):
         address = self._resolve_address(address)
         err = self.connect_ex(address)
         if err:
-            raise stdsocket.error(err)
+            raise stdsocket.error(err, "")
     def connect_ex(self, address):
-        channel = stackless.channel()
-        channel.preference = 1
+        channel = self._get_wchannel()
         def connect_callback(_tcp_handle, err):
             if channel.balance < 0:
-                channel.send(err)
+                if err is not None:
+                    err = _errno_map[err]
+                    channel.send(err)
+                else:
+                    channel.send(err)
         self._tcp_socket.connect(address, connect_callback)
         err = self._receive_with_timeout(channel)
         if err is None:
@@ -261,13 +263,14 @@ class _fakesocket(object):
     def listen(self, backlog): # TCP
         if backlog < 1:
             raise RuntimeError("Not supported by libuv at this time")
+        channel = self._get_rchannel()
         def listen_callback(_listen_tcp_socket, err):
-            if self._accept_channel and self._accept_channel.balance < 0:
+            while channel.balance < 0:
                 if err is None:
-                    self._accept_channel.send(None)
+                    channel.send(None)
                 else:
                     # TODO: Really should be able to pass multiple arguments to the exception type..
-                    self._accept_channel.send_exception(stdsocket.error, _errno_map[err])
+                    channel.send_exception(stdsocket.error, _errno_map[err])
         self._tcp_socket.listen(listen_callback, backlog)
         self._listening = True
     def makefile(self, mode, bufsize): # ?? HOW?
@@ -282,8 +285,10 @@ class _fakesocket(object):
             if not self._was_connected:
                 raise stdsocket.error(ENOTCONN, 'Socket is not connected')
 
-        channel = stackless.channel()
-        channel.preference = 1
+        channel = self._get_rchannel()
+        if (not self._blocking or self._timeout == 0.0) and channel.balance < 1:
+            raise stdsocket.error(EWOULDBLOCK, _EWOULDBLOCK_text)
+
         if self.type == SOCK_STREAM:
             def tcp_callback(redundant_handle, data, err):
                 self._tcp_socket.stop_read()
@@ -297,7 +302,14 @@ class _fakesocket(object):
                         channel.send_exception(stdsocket.error, _errno_map[err])
             self._tcp_socket.start_read(tcp_callback)
         else:
-            raise NotImplementedError("socket.recvfrom/UDP")
+            def udp_callback(redundant_handle, address, data, err):
+                self._udp_socket.stop_recv()
+                if channel.balance < 0:
+                    if err is None:
+                        channel.send(data)
+                    else:
+                        channel.send_exception(stdsocket.error, _errno_map[err])
+            self._udp_socket.start_recv(udp_callback)
         return self._receive_with_timeout(channel)
     def recvfrom(self, bufsize, flags=0): # UDP?
         """
@@ -305,11 +317,15 @@ class _fakesocket(object):
               can be larger than this size.
         """
         if self.type == SOCK_DGRAM:
-            channel = stackless.channel()
-            channel.preference = 1
+            if bufsize < 0:
+                raise ValueError("negative buffersize in recvfrom")
+            channel = self._get_rchannel()
+            if (not self._blocking or self._timeout == 0.0) and channel.balance < 1:
+                raise stdsocket.error(EWOULDBLOCK, _EWOULDBLOCK_text)
+
             def udp_callback(redundant_handle, address, data, err):
                 self._udp_socket.stop_recv()
-                if channel.balance < 0:
+                while channel.balance < 0:
                     if err == pyuv.errno.UV_EOF:
                         err = None
                         data = ""
@@ -321,21 +337,22 @@ class _fakesocket(object):
             return self._receive_with_timeout(channel)
         else:
             return self.recv(bufsize, flags), self.getpeername()
-    def recvfrom_into(self, buffer, nbytes, flags=0):
+    def recvfrom_into(self, buffer, nbytes=0, flags=0):
         raise NotImplementedError("socket.recvfrom_into")
-    def recv_into(self, buffer, nbytes, flags=0):
+    def recv_into(self, buffer, nbytes=0, flags=0):
         raise NotImplementedError("socket.recv_into")
     def send(self, string, flags=0): # TCP / UDP
-        channel = stackless.channel()
-        channel.preference = 1
-        def write_callback(redundant_tcp_handle, err):
-            if channel.balance < 0:
+        channel = self._get_wchannel()
+        if (not self._blocking or self._timeout == 0.0) and channel.balance < 1:
+            raise stdsocket.error(EWOULDBLOCK, _EWOULDBLOCK_text)
+        def send_callback(redundant_tcp_handle, err):
+            while channel.balance < 0:
                 if err is None:
                     channel.send(None)
                 else:
                     # TODO: Really should be able to pass multiple arguments to the exception type..
                     channel.send_exception(stdsocket.error, _errno_map[err])
-        self._socket.write(string, write_callback)
+        self._socket.write(string, send_callback)
         self._receive_with_timeout(channel)
         return len(string)
     def sendall(self, string, flags=0):
@@ -365,8 +382,10 @@ class _fakesocket(object):
 
         address = self._resolve_address(address)
 
-        channel = stackless.channel()
-        channel.preference = 1
+        channel = self._get_wchannel()
+        if (not self._blocking or self._timeout == 0.0) and channel.balance < 1:
+            raise stdsocket.error(EWOULDBLOCK, _EWOULDBLOCK_text)
+
         def send_callback(redundant_tcp_handle, err):
             if channel.balance < 0:
                 if err is None:
@@ -413,14 +432,13 @@ class _fakesocket(object):
             elif optname == SO_REUSEADDR:
                 self._opt_reuseaddr = bool(value)
     def shutdown(self, how): # TCP
-        if how != stdsocket.SHUT_WR:
-            raise RuntimeError("Not supported")
-        channel = stackless.channel()
-        channel.preference = 1
-        def shutdown_callback(tcp_handle):
-            channel.send(None)
-        self._tcp_socket.shutdown(shutdown_callback)
-        channel.receive()
+        if how == stdsocket.SHUT_WR:
+            channel = stackless.channel()
+            channel.preference = 1
+            def shutdown_callback(tcp_handle):
+                channel.send(None)
+            self._tcp_socket.shutdown(shutdown_callback)
+            channel.receive()
     # Official socket object read-only properties.
     @property
     def family(self):
@@ -464,6 +482,16 @@ class _fakesocket(object):
         elif address[0] == "localhost":
             address = ("127.0.0.1", address[1])
         return address
+    def _get_rchannel(self):
+        if self._rchannel is None:
+            self._rchannel = stackless.channel()
+            self._rchannel.preference = 1
+        return self._rchannel
+    def _get_wchannel(self):
+        if self._wchannel is None:
+            self._wchannel = stackless.channel()
+            self._wchannel.preference = 1
+        return self._wchannel
 
 def test():
     #sock = _fakesocket()
