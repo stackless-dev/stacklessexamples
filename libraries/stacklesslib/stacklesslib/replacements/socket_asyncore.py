@@ -49,7 +49,7 @@ import time
 import types
 import weakref
 
-import stackless 
+import stackless
 
 # If you pump the scheduler and wish to prevent the scheduler from staying
 # non-empty for prolonged periods of time, If you do not pump the scheduler,
@@ -134,7 +134,7 @@ def ManageSockets():
     try:
         while len(asyncore.socket_map):
             # Check the sockets for activity.
-            # print "POLL"
+            #print "POLL"
             asyncore.poll(poll_interval)
             # Yield to give other tasklets a chance to be scheduled.
             # print "SCHED"
@@ -148,10 +148,20 @@ def StartManager():
         managerRunning = True
         return stackless.tasklet(ManageSockets)()
 
+def pump():
+    """poll the sockets without waiting"""
+    asyncore.poll(0)
+
 _schedule_func = stackless.schedule
 _manage_sockets_func = StartManager
 _sleep_func = None
 _timeout_func = None
+_channel_refs = weakref.WeakKeyDictionary()
+
+def make_channel():
+    c = stackless.channel()
+    _channel_refs[c] = None
+    return c
 
 def can_timeout():
     return _sleep_func is not None or _timeout_func is not None
@@ -337,7 +347,7 @@ class _fakesocket(asyncore_dispatcher):
             return channel.receive()
 
     def _manage_receive_with_timeout(self, channel):
-        if channel.balance < 0:            
+        if channel.balance < 0:
             _sleep_func(self._timeout)
             if channel.balance < 0:
                 channel.send_exception(timeout, "timed out")
@@ -382,7 +392,7 @@ class _fakesocket(asyncore_dispatcher):
     def accept(self):
         self._ensure_non_blocking_read()
         if not self.acceptChannel:
-            self.acceptChannel = stackless.channel()
+            self.acceptChannel = make_channel()
         return self.receive_with_timeout(self.acceptChannel)
 
     def connect(self, address):
@@ -392,11 +402,11 @@ class _fakesocket(asyncore_dispatcher):
         they not wish the connection to potentially establish anyway.
         """
         asyncore_dispatcher.connect(self, address)
-        
+
         # UDP sockets do not connect.
         if self.socket.type != SOCK_DGRAM and not self.connected:
             if not self.connectChannel:
-                self.connectChannel = stackless.channel()
+                self.connectChannel = make_channel()
                 # Prefer the sender.  Do not block when sending, given that
                 # there is a tasklet known to be waiting, this will happen.
                 self.connectChannel.preference = 1
@@ -405,7 +415,7 @@ class _fakesocket(asyncore_dispatcher):
     def _send(self, data, flags):
         self._ensure_connected()
 
-        channel = stackless.channel()
+        channel = make_channel()
         channel.preference = 1 # Prefer the sender.
         self.writeQueue.append((channel, flags, data))
         return self.receive_with_timeout(channel)
@@ -437,7 +447,7 @@ class _fakesocket(asyncore_dispatcher):
                 waitChannel = channel
                 break
         if waitChannel is None:
-            waitChannel = stackless.channel()
+            waitChannel = make_channel()
             self.sendToBuffers.append((sendData, sendAddress, waitChannel, 0))
         return self.receive_with_timeout(waitChannel)
 
@@ -463,7 +473,7 @@ class _fakesocket(asyncore_dispatcher):
                 #print "_recv:FORCE-CHANNEL-CHANGE %d %d" % (self.lastReadTally, self.lastReadCalls)
 
             if channel is None:
-                channel = stackless.channel()
+                channel = make_channel()
                 channel.preference = -1 # Prefer the receiver.
                 self.lastReadTally = self.lastReadCalls = 0
                 #print self._fileno, "_recv:NEW-CHANNEL", id(channel)
@@ -573,7 +583,7 @@ class _fakesocket(asyncore_dispatcher):
             # The socket has been closed already.
             raise error(EBADF, 'Bad file descriptor')
 
-    def setblocking(self, flag):    
+    def setblocking(self, flag):
         self._blocking = flag
 
     def gettimeout(self):
@@ -662,12 +672,13 @@ class _fakesocket(asyncore_dispatcher):
             return
 
         channel, methodName, args = self.readQueue[0]
+        fn = getattr(self.socket, methodName)
         #print self._fileno, "handle_read:---ENTER---", id(channel)
         while channel.balance < 0:
             args = self.readQueue[0][2]
             #print self._fileno, "handle_read:CALL", id(channel), args
             try:
-                result = getattr(self.socket, methodName)(*args)
+                result = fn(*args)
                 #print self._fileno, "handle_read:RESULT", id(channel), len(result)
             except Exception, e:
                 # winsock sometimes throws ENOTCONN

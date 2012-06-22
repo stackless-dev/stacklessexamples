@@ -9,7 +9,7 @@ import weakref
 import stackless
 
 from stacklesslib.locks import Lock, RLock, Semaphore, Condition, BoundedSemaphore, Event
-from stacklesslib.main import set_channel_pref
+from stacklesslib.main import set_channel_pref, sleep
 from stacklesslib.util import local
 import stacklesslib.replacements.thread as thread
 _start_new_thread = thread.start_new_thread
@@ -44,7 +44,7 @@ def TaskletDump():
 def enumerate():
     return _active.values()
 
-    
+
 def activeCount():
     return len(_active)
 
@@ -66,10 +66,10 @@ class Thread(object):
         self._alive = False
         self.ident = None
         self._daemon = self._set_daemon()
-        
+
     def _set_daemon(self):
-        self._daemon = current_thread().daemon        
-    
+        self._daemon = current_thread().daemon
+
     def __repr__(self):
         status = "initial"
         if self._started:
@@ -78,8 +78,8 @@ class Thread(object):
             status += " daemon"
         if self.ident is not None:
             status += " %s" % self.ident
-        return "<%s(%s, %s)>" % (self.__class__.__name__, self.name, status)    
-    
+        return "<%s(%s, %s)>" % (self.__class__.__name__, self.name, status)
+
     def start(self):
         if self._started:
             raise RuntimeError, "Can't start a thread more than once."
@@ -88,7 +88,7 @@ class Thread(object):
         _active[self.ident] = self
         self._alive = True
         self._started = True
- 
+
     @staticmethod
     def _taskfunc(self):
         try:
@@ -99,16 +99,16 @@ class Thread(object):
             self._alive = False
             del _active[self.ident]
             self._join.set()
-    
+
     def run(self):
         try:
             if self.target:
                 self.target(*self.args, **self.kwargs)
         finally:
             self.target = self.args = self.kwargs = None
-        
+
     def join(self, timeout=None):
-        if not self._started:    
+        if not self._started:
             raise RuntimeError, "Can't wait on a not-started thread."
         if currentThread() is self:
             raise RuntimeError, "Can't wait on the same thread."
@@ -130,7 +130,7 @@ class Thread(object):
         return self.daemon
     def setDaemon(self, daemon):
         self.daemon = daemon
-        
+
     def is_alive(self):
         return self._alive
     isAlive = is_alive
@@ -169,30 +169,29 @@ class _DummyThread(Thread):
         self.ident = id(stackless.getcurrent())
         _active[self.ident] = self
         del self._join
-    
+
     def _set_daemon(self):
         return False
-        
+
     def join(self, timeout=None):
         raise RuntimeError, "cannot join a dummy thread"
 
-        
+
 class Timer(Thread):
     def __init__(self, interval, function, args=(), kwargs={}):
         self._canceled = False
         self._interval = interval
         self._function = function
         Thread.__init__(self, target=self._function, args=args, kwargs=kwargs)
-    
+
     def cancel(self):
         self._canceled = True
-    
+
     def _function(self, *args, **kwargs):
-        main.sleep(interval)
+        sleep(self._interval)
         if not self._canceled:
             self.function(*args, **kwargs)
 
 
 #Create the MainThread instance
 _MainThread()
- 

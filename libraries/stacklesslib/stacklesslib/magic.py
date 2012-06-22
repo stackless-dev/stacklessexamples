@@ -2,7 +2,6 @@
 # This module switches a threaded program to a tasklet based one.
 
 import runpy
-import os
 import sys
 from .monkeypatch import patch_all
 
@@ -20,7 +19,7 @@ def run():
                 #support the -m syntax after "magic"
                 target = sys.argv.pop(1)
                 runpy.run_module(target, run_name="__main__", alter_sys=True)
-            else:    
+            else:
                 runpy.run_path(target, run_name="__main__")
     except Exception:
         main.mainloop.exception = sys.exc_info()
