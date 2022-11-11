@@ -1,5 +1,5 @@
 #
-# Factorial example using stackless to break Python's recustion limit of 1000
+# Factorial example using stackless to break Python's recursion limit of 1000
 #
 # by Andrew Dalke
 #
